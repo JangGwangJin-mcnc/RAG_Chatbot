@@ -1,0 +1,16 @@
+streamlit
+langchain
+faiss-cpu
+pymupdf
+langchain-openai
+langchain-community
+sentence-transformers
+langchain-ollama
+langchain-huggingface
+pandas
+openpyxl
+python-pptx
+python-docx
+unstructured
+torch>=2.0.0
+transformers>=4.30.0 

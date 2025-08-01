@@ -77,6 +77,19 @@ try:
     test_array = numpy.array([1, 2, 3])
     logger.info("NumPy test successful")
     
+    # NumPy를 전역으로 설정하여 다른 모듈에서 사용할 수 있도록 함
+    import sys
+    sys.modules['numpy'] = numpy
+    
+    # PyTorch와 NumPy 호환성 강제 설정
+    try:
+        import torch
+        if hasattr(torch, 'set_default_tensor_type'):
+            torch.set_default_tensor_type('torch.FloatTensor')
+        logger.info("PyTorch NumPy compatibility set")
+    except Exception as e:
+        logger.warning(f"PyTorch NumPy compatibility setup failed: {e}")
+    
 except ImportError:
     logger.error("NumPy is not installed")
     st.error("NumPy가 설치되지 않았습니다. pip install numpy>=1.26.2를 실행해주세요.")
@@ -274,7 +287,7 @@ def save_to_chroma_store(documents: list) -> None:
         # ChromaDB에 저장
         logger.info("ChromaDB document save started")
         try:
-            # NumPy 강제 재설정
+            # NumPy 강제 재설정 및 호환성 해결
             import numpy as np
             import torch
             
@@ -294,6 +307,20 @@ def save_to_chroma_store(documents: list) -> None:
             # SentenceTransformers에서 NumPy 사용 강제 설정
             import os
             os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+            os.environ['PYTORCH_DISABLE_WARNINGS'] = '1'
+            
+            # NumPy를 전역으로 설정하여 SentenceTransformers에서 사용할 수 있도록 함
+            import sys
+            sys.modules['numpy'] = np
+            
+            # SentenceTransformers 모듈에서 NumPy 재설정
+            try:
+                import sentence_transformers
+                if hasattr(sentence_transformers, 'np'):
+                    sentence_transformers.np = np
+                logger.info("SentenceTransformers NumPy override successful")
+            except Exception as e:
+                logger.warning(f"SentenceTransformers NumPy override failed: {e}")
             
             vector_store = Chroma.from_documents(
                 documents=documents,

@@ -52,6 +52,15 @@ except ImportError:
     st.error("ChromaDB가 설치되지 않았습니다. pip install chromadb를 실행해주세요.")
     CHROMADB_AVAILABLE = False
 
+# NumPy 강제 설치 확인
+try:
+    import numpy
+    logger.info(f"NumPy 버전: {numpy.__version__}")
+except ImportError:
+    logger.error("NumPy가 설치되지 않았습니다. pip install numpy를 실행해주세요.")
+    st.error("NumPy가 설치되지 않았습니다. pip install numpy를 실행해주세요.")
+    st.stop()
+
 # 기타 필요한 import들
 try:
     from langchain_community.embeddings import HuggingFaceEmbeddings
@@ -210,6 +219,16 @@ def save_to_chroma_store(documents: list) -> None:
         selected_embedding = st.session_state.get('selected_embedding_model', 'sentence-transformers/all-mpnet-base-v2')
         logger.info(f"임베딩 모델 로딩 시작: {selected_embedding}")
         
+        # NumPy 재확인
+        try:
+            import numpy
+            logger.info(f"NumPy 재확인: {numpy.__version__}")
+        except ImportError:
+            error_msg = "NumPy가 설치되지 않았습니다. pip install numpy를 실행해주세요."
+            logger.error(error_msg)
+            st.error(f"❌ {error_msg}")
+            return
+        
         embeddings = HuggingFaceEmbeddings(model_name=selected_embedding)
         logger.info("임베딩 모델 로딩 완료")
         
@@ -217,16 +236,24 @@ def save_to_chroma_store(documents: list) -> None:
         
         # ChromaDB에 저장
         logger.info("ChromaDB에 문서 저장 시작")
-        vector_store = Chroma.from_documents(
-            documents=documents,
-            embedding=embeddings,
-            persist_directory=get_chroma_db_path()
-        )
-        vector_store.persist()
-        logger.info("ChromaDB 문서 저장 완료")
-        
-        st.success("✅ 벡터 데이터베이스 저장 완료 (ChromaDB 사용)")
-        logger.info("벡터 데이터베이스 저장 성공")
+        try:
+            vector_store = Chroma.from_documents(
+                documents=documents,
+                embedding=embeddings,
+                persist_directory=get_chroma_db_path()
+            )
+            vector_store.persist()
+            logger.info("ChromaDB 문서 저장 완료")
+            
+            st.success("✅ 벡터 데이터베이스 저장 완료 (ChromaDB 사용)")
+            logger.info("벡터 데이터베이스 저장 성공")
+        except RuntimeError as e:
+            if "Numpy is not available" in str(e):
+                error_msg = "NumPy 오류가 발생했습니다. pip install numpy==1.24.3를 실행해주세요."
+                logger.error(error_msg)
+                st.error(f"❌ {error_msg}")
+            else:
+                raise e
         
     except Exception as e:
         error_msg = f"벡터 데이터베이스 저장 실패: {e}"

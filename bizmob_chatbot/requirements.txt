@@ -14,5 +14,6 @@ PyPDF2>=3.0.0
 pypdf>=3.0.0
 pdfplumber>=0.10.0
 unstructured
-numpy>=1.22.0
-scikit-learn>=1.0.0 
+numpy==1.24.3
+scikit-learn>=1.0.0
+torch>=2.0.0 

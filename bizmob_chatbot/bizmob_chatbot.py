@@ -63,11 +63,11 @@ try:
     
 except ImportError:
     logger.error("NumPy가 설치되지 않았습니다.")
-    st.error("NumPy가 설치되지 않았습니다. pip install numpy==1.24.3를 실행해주세요.")
+    st.error("NumPy가 설치되지 않았습니다. pip install numpy>=1.26.2를 실행해주세요.")
     st.stop()
 except Exception as e:
     logger.error(f"NumPy 오류: {e}")
-    st.error(f"NumPy 오류가 발생했습니다. pip install numpy==1.24.3를 실행해주세요.")
+    st.error(f"NumPy 오류가 발생했습니다. pip install numpy>=1.26.2를 실행해주세요.")
     st.stop()
 
 # 기타 필요한 import들
@@ -239,12 +239,12 @@ def save_to_chroma_store(documents: list) -> None:
             logger.info(f"NumPy 기능 테스트 성공: {test_result}")
             
         except ImportError:
-            error_msg = "NumPy가 설치되지 않았습니다. 터미널에서 다음 명령어를 실행하세요: pip install numpy==1.24.3"
+            error_msg = "NumPy가 설치되지 않았습니다. 터미널에서 다음 명령어를 실행하세요: pip install numpy>=1.26.2"
             logger.error(error_msg)
             st.error(f"❌ {error_msg}")
             return
         except Exception as e:
-            error_msg = f"NumPy 오류가 발생했습니다: {e}. 터미널에서 다음 명령어를 실행하세요: pip uninstall numpy && pip install numpy==1.24.3"
+            error_msg = f"NumPy 오류가 발생했습니다: {e}. 터미널에서 다음 명령어를 실행하세요: pip uninstall numpy && pip install numpy>=1.26.2"
             logger.error(error_msg)
             st.error(f"❌ {error_msg}")
             return
@@ -269,7 +269,7 @@ def save_to_chroma_store(documents: list) -> None:
             logger.info("벡터 데이터베이스 저장 성공")
         except RuntimeError as e:
             if "Numpy is not available" in str(e):
-                error_msg = "NumPy 오류가 발생했습니다. 터미널에서 다음 명령어를 실행하세요: pip uninstall numpy && pip install numpy==1.24.3"
+                error_msg = "NumPy 오류가 발생했습니다. 터미널에서 다음 명령어를 실행하세요: pip uninstall numpy && pip install numpy>=1.26.2"
                 logger.error(error_msg)
                 st.error(f"❌ {error_msg}")
                 st.info("💡 팁: 가상환경을 사용 중이라면 가상환경을 비활성화하고 다시 활성화한 후 설치해보세요.")

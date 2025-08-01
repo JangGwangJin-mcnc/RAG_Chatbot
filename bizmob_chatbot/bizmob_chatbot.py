@@ -72,7 +72,7 @@ class HybridRetriever(BaseRetriever):
             return []
     
     def _get_relevant_documents(self, query: str) -> List[Document]:
-        """관련 문서 검색 (하이브리드 방식)"""
+        """관련 문서 `검색 (하이브리드 방식)"""
         try:
             # 시멘틱 검색 수행 (더 많은 결과 가져오기)
             semantic_results = self._semantic_search(query, k=self._k * 2)
@@ -1136,6 +1136,20 @@ def get_vector_db_path():
 def main():
     st.set_page_config("bizMOB Platform 챗봇", layout="wide", page_icon="📱")
 
+    # session_state 초기화
+    if 'selected_model' not in st.session_state:
+        st.session_state.selected_model = 'hyperclovax'
+    if 'selected_embedding_model' not in st.session_state:
+        st.session_state.selected_embedding_model = 'sentence-transformers/all-MiniLM-L6-v2'
+    if 'vector_db_initialized' not in st.session_state:
+        st.session_state.vector_db_initialized = False
+    if 'refresh_vector_db_info' not in st.session_state:
+        st.session_state.refresh_vector_db_info = False
+    if 'refresh_faiss_viewer' not in st.session_state:
+        st.session_state.refresh_faiss_viewer = False
+    if 'faiss_viewer_page' not in st.session_state:
+        st.session_state.faiss_viewer_page = 1
+
     # 사이드바에 제목과 설명
     st.sidebar.title("📱 bizMOB Platform 챗봇")
     st.sidebar.markdown("---")
@@ -1235,7 +1249,13 @@ def main():
     if 'selected_embedding_model' in st.session_state:
         current_embedding = st.session_state.selected_embedding_model
     else:
-        current_embedding = get_recommended_embedding_model(st.session_state.selected_model)
+        # selected_model이 초기화되지 않은 경우 기본값 사용
+        selected_model = st.session_state.get('selected_model', 'hyperclovax')
+        # selected_model이 None이거나 빈 문자열인 경우 기본값 사용
+        if not selected_model:
+            selected_model = 'hyperclovax'
+            st.session_state.selected_model = selected_model
+        current_embedding = get_recommended_embedding_model(selected_model)
         st.session_state.selected_embedding_model = current_embedding
     
     available_embedding_models = get_available_embedding_models()
@@ -1318,13 +1338,14 @@ def main():
         
         with tab1:
             # 현재 선택된 모델 정보 표시
-            if 'selected_model' in st.session_state:
+            selected_model = st.session_state.get('selected_model', 'hyperclovax')
+            if selected_model:
                 # 저장된 모델 정보가 있는지 확인
                 saved_model_info = load_saved_model_info()
-                if saved_model_info and saved_model_info.get('ai_model') == st.session_state.selected_model:
-                    st.success(f"🤖 **현재 사용 중인 AI 모델 (저장됨)**: {st.session_state.selected_model}")
+                if saved_model_info and saved_model_info.get('ai_model') == selected_model:
+                    st.success(f"🤖 **현재 사용 중인 AI 모델 (저장됨)**: {selected_model}")
                 else:
-                    st.info(f"🤖 **현재 사용 중인 AI 모델**: {st.session_state.selected_model}")
+                    st.info(f"🤖 **현재 사용 중인 AI 모델**: {selected_model}")
             
             # 현재 선택된 임베딩 모델 정보 표시
             if 'selected_embedding_model' in st.session_state:

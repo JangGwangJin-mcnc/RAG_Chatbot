@@ -81,6 +81,12 @@ try:
     import sys
     sys.modules['numpy'] = numpy
     
+    # 환경 변수 설정으로 NumPy 호환성 강화
+    import os
+    os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+    os.environ['PYTORCH_DISABLE_WARNINGS'] = '1'
+    os.environ['TRANSFORMERS_OFFLINE'] = '0'
+    
     # PyTorch와 NumPy 호환성 강제 설정
     try:
         import torch
@@ -89,6 +95,24 @@ try:
         logger.info("PyTorch NumPy compatibility set")
     except Exception as e:
         logger.warning(f"PyTorch NumPy compatibility setup failed: {e}")
+    
+    # Transformers 라이브러리에서 NumPy 설정
+    try:
+        import transformers
+        if hasattr(transformers, 'np'):
+            transformers.np = numpy
+        logger.info("Transformers NumPy compatibility set")
+    except Exception as e:
+        logger.warning(f"Transformers NumPy compatibility setup failed: {e}")
+    
+    # SentenceTransformers에서 NumPy 설정
+    try:
+        import sentence_transformers
+        if hasattr(sentence_transformers, 'np'):
+            sentence_transformers.np = numpy
+        logger.info("SentenceTransformers NumPy compatibility set")
+    except Exception as e:
+        logger.warning(f"SentenceTransformers NumPy compatibility setup failed: {e}")
     
 except ImportError:
     logger.error("NumPy is not installed")
@@ -283,6 +307,12 @@ def save_to_chroma_store(documents: list) -> None:
         try:
             import numpy as np
             import sys
+            import os
+            
+            # 환경 변수 설정으로 NumPy 호환성 강화
+            os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+            os.environ['PYTORCH_DISABLE_WARNINGS'] = '1'
+            os.environ['TRANSFORMERS_OFFLINE'] = '0'
             
             # 모든 관련 모듈에서 NumPy 강제 설정
             sys.modules['numpy'] = np
@@ -294,6 +324,24 @@ def save_to_chroma_store(documents: list) -> None:
                 logger.info("SentenceTransformers NumPy pre-override successful")
             except Exception as e:
                 logger.warning(f"SentenceTransformers NumPy pre-override failed: {e}")
+            
+            # PyTorch에서 NumPy 호환성 강화
+            try:
+                import torch
+                if hasattr(torch, 'set_default_tensor_type'):
+                    torch.set_default_tensor_type('torch.FloatTensor')
+                logger.info("PyTorch NumPy compatibility set")
+            except Exception as e:
+                logger.warning(f"PyTorch NumPy compatibility setup failed: {e}")
+            
+            # HuggingFaceEmbeddings 초기화 전에 모든 모듈에서 NumPy 설정
+            try:
+                import transformers
+                if hasattr(transformers, 'np'):
+                    transformers.np = np
+                logger.info("Transformers NumPy override successful")
+            except Exception as e:
+                logger.warning(f"Transformers NumPy override failed: {e}")
             
             # HuggingFaceEmbeddings 초기화
             embeddings = HuggingFaceEmbeddings(model_name=selected_embedding)

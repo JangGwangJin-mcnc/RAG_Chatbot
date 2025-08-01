@@ -1,199 +1,283 @@
+#!/usr/bin/env python3
+"""
+파일 처리 유틸리티
+다양한 문서 형식을 처리하고 텍스트를 추출하는 기능
+"""
+
 import os
-import re
-import glob
-import pandas as pd
-from typing import List
-from streamlit.runtime.uploaded_file_manager import UploadedFile
-import streamlit as st
-from pptx import Presentation
-from docx import Document as DocxDocument
-from langchain_core.documents.base import Document
+import io
+import tempfile
+from typing import List, Dict, Any
+from langchain_core.documents import Document
+import warnings
 
-def save_uploaded_file(uploaded_file: UploadedFile, folder_path: str = "PDF_bizMOB_Guide") -> str:
-    try:
-        if not os.path.exists(folder_path):
-            os.makedirs(folder_path)
-        file_path = os.path.join(folder_path, uploaded_file.name)
-        with open(file_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
-        return file_path
-    except Exception as e:
-        st.error(f"파일 저장 중 오류: {str(e)}")
-        return None
+# 경고 억제
+warnings.filterwarnings("ignore")
 
-def get_supported_file_types() -> dict:
-    return {
-        'pdf': 'PDF 문서 (.pdf)',
-        'xlsx': 'Excel 스프레드시트 (.xlsx)',
-        'xls': 'Excel 스프레드시트 (.xls)',
-        'pptx': 'PowerPoint 프레젠테이션 (.pptx)',
-        'ppt': 'PowerPoint 프레젠테이션 (.ppt)',
-        'docx': 'Word 문서 (.docx)',
-        'doc': 'Word 문서 (.doc)'
-    }
+def get_supported_extensions() -> List[str]:
+    """지원되는 파일 확장자 목록 반환"""
+    return ['pdf', 'txt', 'docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt']
 
-def validate_file_type(filename: str) -> bool:
-    supported_extensions = ['.pdf', '.xlsx', '.xls', '.pptx', '.ppt', '.docx', '.doc']
-    file_ext = os.path.splitext(filename.lower())[1]
-    return file_ext in supported_extensions
-
-def list_uploaded_files(folder_path: str = "PDF_bizMOB_Guide") -> dict:
-    if not os.path.exists(folder_path):
-        return {}
-    files_by_type = {
-        'PDF': [],
-        'Excel': [],
-        'PowerPoint': [],
-        'Word': []
-    }
-    supported_extensions = {
-        '*.pdf': 'PDF',
-        '*.xlsx': 'Excel',
-        '*.xls': 'Excel',
-        '*.pptx': 'PowerPoint',
-        '*.ppt': 'PowerPoint',
-        '*.docx': 'Word',
-        '*.doc': 'Word'
-    }
-    for pattern, file_type in supported_extensions.items():
-        files = glob.glob(os.path.join(folder_path, pattern))
-        for file_path in files:
-            file_size = os.path.getsize(file_path) / 1024  # KB
-            files_by_type[file_type].append({
-                'name': os.path.basename(file_path),
-                'path': file_path,
-                'size': file_size
-            })
-    return files_by_type
-
-def safe_key(filename: str) -> str:
-    safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', filename)
-    if safe_name and safe_name[0].isdigit():
-        safe_name = 'file_' + safe_name
-    return safe_name
-
-def delete_file(file_path: str) -> bool:
-    try:
-        if not os.path.exists(file_path):
-            st.error(f"파일이 존재하지 않습니다: {file_path}")
-            return False
-        os.remove(file_path)
-        if os.path.exists(file_path):
-            st.error(f"파일 삭제에 실패했습니다: {file_path}")
-            return False
-        return True
-    except PermissionError:
-        st.error(f"파일 삭제 권한이 없습니다: {file_path}")
-        return False
-    except Exception as e:
-        st.error(f"파일 삭제 중 오류: {str(e)}")
-        return False
-
-def delete_file_with_confirmation(file_path: str, file_name: str) -> bool:
-    confirm_key = f"confirm_delete_{file_name}"
-    if confirm_key not in st.session_state:
-        st.session_state[confirm_key] = False
-    if not st.session_state[confirm_key]:
-        if st.button(f"🗑️ 삭제 확인", key=f"confirm_{file_name}"):
-            st.session_state[confirm_key] = True
-            return False
-        return False
+def process_file(uploaded_file) -> List[Document]:
+    """업로드된 파일을 처리하여 Document 객체 리스트 반환"""
+    
+    file_extension = uploaded_file.name.split('.')[-1].lower()
+    
+    if file_extension == 'pdf':
+        return process_pdf(uploaded_file)
+    elif file_extension in ['docx', 'doc']:
+        return process_word(uploaded_file)
+    elif file_extension in ['xlsx', 'xls']:
+        return process_excel(uploaded_file)
+    elif file_extension in ['pptx', 'ppt']:
+        return process_powerpoint(uploaded_file)
+    elif file_extension == 'txt':
+        return process_text(uploaded_file)
     else:
-        if delete_file(file_path):
-            st.success(f"✅ {file_name} 파일이 삭제되었습니다.")
-            del st.session_state[confirm_key]
-            st.warning("⚠️ 삭제된 파일이 벡터 데이터베이스에 반영되려면 재초기화가 필요합니다.")
-            if st.button("🔄 벡터DB 재초기화", key=f"reinit_after_delete_{file_name}"):
-                from .vector_db_utils import initialize_vector_db
-                if initialize_vector_db():
-                    st.session_state.vector_db_initialized = True
-                    st.success("벡터 데이터베이스가 성공적으로 재초기화되었습니다!")
-            return True
-        else:
-            st.error(f"❌ {file_name} 파일 삭제에 실패했습니다.")
-            del st.session_state[confirm_key]
-            return False
+        raise ValueError(f"지원되지 않는 파일 형식: {file_extension}")
 
-def load_excel_file(file_path: str) -> List[Document]:
-    documents = []
+def process_pdf(uploaded_file) -> List[Document]:
+    """PDF 파일 처리"""
     try:
-        excel_file = pd.ExcelFile(file_path)
-        for sheet_name in excel_file.sheet_names:
-            df = pd.read_excel(file_path, sheet_name=sheet_name)
-            text_content = f"시트명: {sheet_name}\n\n"
-            if not df.empty:
-                text_content += f"컬럼: {', '.join(df.columns.tolist())}\n\n"
-                for idx, row in df.head(100).iterrows():
-                    row_text = " | ".join([f"{col}: {val}" for col, val in row.items() if pd.notna(val)])
-                    if row_text.strip():
-                        text_content += f"행 {idx+1}: {row_text}\n"
-            doc = Document(
-                page_content=text_content,
-                metadata={
-                    'file_path': file_path,
-                    'file_name': os.path.basename(file_path),
-                    'file_type': 'Excel',
-                    'sheet_name': sheet_name
-                }
-            )
-            documents.append(doc)
-    except Exception as e:
-        st.error(f"Excel 파일 처리 중 오류: {str(e)}")
-    return documents
-
-def load_powerpoint_file(file_path: str) -> List[Document]:
-    documents = []
-    try:
-        prs = Presentation(file_path)
-        for slide_num, slide in enumerate(prs.slides, 1):
-            text_content = f"슬라이드 {slide_num}:\n\n"
-            for shape in slide.shapes:
-                if hasattr(shape, "text") and shape.text.strip():
-                    text_content += f"{shape.text}\n\n"
-            if text_content.strip() and text_content != f"슬라이드 {slide_num}:\n\n":
+        import PyPDF2
+        
+        # 파일 내용 읽기
+        pdf_reader = PyPDF2.PdfReader(io.BytesIO(uploaded_file.read()))
+        
+        documents = []
+        for page_num, page in enumerate(pdf_reader.pages):
+            text = page.extract_text()
+            if text.strip():
                 doc = Document(
-                    page_content=text_content,
+                    page_content=text,
                     metadata={
-                        'file_path': file_path,
-                        'file_name': os.path.basename(file_path),
-                        'file_type': 'PowerPoint',
-                        'slide_number': slide_num
+                        'source': uploaded_file.name,
+                        'page': page_num + 1,
+                        'file_type': 'pdf'
                     }
                 )
                 documents.append(doc)
+        
+        return documents
+        
     except Exception as e:
-        st.error(f"PowerPoint 파일 처리 중 오류: {str(e)}")
-    return documents
+        raise Exception(f"PDF 파일 처리 실패: {e}")
 
-def load_word_file(file_path: str) -> List[Document]:
-    documents = []
+def process_word(uploaded_file) -> List[Document]:
+    """Word 파일 처리"""
     try:
-        doc = DocxDocument(file_path)
-        text_content = ""
-        if doc.core_properties.title:
-            text_content += f"제목: {doc.core_properties.title}\n\n"
-        for para in doc.paragraphs:
-            if para.text.strip():
-                text_content += para.text + "\n\n"
+        from docx import Document as DocxDocument
+        
+        # 파일 내용 읽기
+        doc = DocxDocument(io.BytesIO(uploaded_file.read()))
+        
+        documents = []
+        text_content = []
+        
+        # 모든 단락에서 텍스트 추출
+        for paragraph in doc.paragraphs:
+            if paragraph.text.strip():
+                text_content.append(paragraph.text)
+        
+        # 표에서 텍스트 추출
         for table in doc.tables:
-            text_content += "표 내용:\n"
             for row in table.rows:
-                row_text = " | ".join([cell.text for cell in row.cells if cell.text.strip()])
-                if row_text.strip():
-                    text_content += row_text + "\n"
-            text_content += "\n"
-        if text_content.strip():
-            doc_chunk = Document(
-                page_content=text_content,
+                row_text = []
+                for cell in row.cells:
+                    if cell.text.strip():
+                        row_text.append(cell.text.strip())
+                if row_text:
+                    text_content.append(' | '.join(row_text))
+        
+        # 전체 텍스트를 하나의 문서로 생성
+        if text_content:
+            full_text = '\n\n'.join(text_content)
+            doc = Document(
+                page_content=full_text,
                 metadata={
-                    'file_path': file_path,
-                    'file_name': os.path.basename(file_path),
-                    'file_type': 'Word',
-                    'title': doc.core_properties.title or 'Unknown',
-                    'author': doc.core_properties.author or 'Unknown'
+                    'source': uploaded_file.name,
+                    'file_type': 'word'
                 }
             )
-            documents.append(doc_chunk)
+            documents.append(doc)
+        
+        return documents
+        
     except Exception as e:
-        st.error(f"Word 파일 처리 중 오류: {str(e)}")
-    return documents 
+        raise Exception(f"Word 파일 처리 실패: {e}")
+
+def process_excel(uploaded_file) -> List[Document]:
+    """Excel 파일 처리"""
+    try:
+        import pandas as pd
+        
+        # 파일 내용 읽기
+        excel_data = pd.read_excel(io.BytesIO(uploaded_file.read()), sheet_name=None)
+        
+        documents = []
+        
+        for sheet_name, df in excel_data.items():
+            if not df.empty:
+                # DataFrame을 텍스트로 변환
+                text_content = []
+                
+                # 헤더 추가
+                headers = df.columns.tolist()
+                text_content.append(' | '.join(str(h) for h in headers))
+                
+                # 데이터 행 추가
+                for _, row in df.iterrows():
+                    row_text = ' | '.join(str(cell) for cell in row.values)
+                    text_content.append(row_text)
+                
+                sheet_text = '\n'.join(text_content)
+                
+                doc = Document(
+                    page_content=sheet_text,
+                    metadata={
+                        'source': uploaded_file.name,
+                        'sheet': sheet_name,
+                        'file_type': 'excel'
+                    }
+                )
+                documents.append(doc)
+        
+        return documents
+        
+    except Exception as e:
+        raise Exception(f"Excel 파일 처리 실패: {e}")
+
+def process_powerpoint(uploaded_file) -> List[Document]:
+    """PowerPoint 파일 처리"""
+    try:
+        from pptx import Presentation
+        
+        # 파일 내용 읽기
+        prs = Presentation(io.BytesIO(uploaded_file.read()))
+        
+        documents = []
+        
+        for slide_num, slide in enumerate(prs.slides):
+            text_content = []
+            
+            # 슬라이드의 모든 도형에서 텍스트 추출
+            for shape in slide.shapes:
+                if hasattr(shape, "text") and shape.text.strip():
+                    text_content.append(shape.text.strip())
+            
+            # 텍스트가 있는 경우에만 문서 생성
+            if text_content:
+                slide_text = '\n\n'.join(text_content)
+                doc = Document(
+                    page_content=slide_text,
+                    metadata={
+                        'source': uploaded_file.name,
+                        'slide': slide_num + 1,
+                        'file_type': 'powerpoint'
+                    }
+                )
+                documents.append(doc)
+        
+        return documents
+        
+    except Exception as e:
+        raise Exception(f"PowerPoint 파일 처리 실패: {e}")
+
+def process_text(uploaded_file) -> List[Document]:
+    """텍스트 파일 처리"""
+    try:
+        # 파일 내용 읽기
+        content = uploaded_file.read().decode('utf-8')
+        
+        # 텍스트를 청크로 분할 (긴 텍스트의 경우)
+        chunks = split_text_into_chunks(content, max_chunk_size=4000)
+        
+        documents = []
+        for i, chunk in enumerate(chunks):
+            doc = Document(
+                page_content=chunk,
+                metadata={
+                    'source': uploaded_file.name,
+                    'chunk': i + 1,
+                    'file_type': 'text'
+                }
+            )
+            documents.append(doc)
+        
+        return documents
+        
+    except Exception as e:
+        raise Exception(f"텍스트 파일 처리 실패: {e}")
+
+def split_text_into_chunks(text: str, max_chunk_size: int = 4000, overlap: int = 200) -> List[str]:
+    """텍스트를 청크로 분할"""
+    if len(text) <= max_chunk_size:
+        return [text]
+    
+    chunks = []
+    start = 0
+    
+    while start < len(text):
+        end = start + max_chunk_size
+        
+        # 문장 경계에서 분할 시도
+        if end < len(text):
+            # 마지막 문장 경계 찾기
+            last_period = text.rfind('.', start, end)
+            last_newline = text.rfind('\n', start, end)
+            
+            if last_period > start and last_period > last_newline:
+                end = last_period + 1
+            elif last_newline > start:
+                end = last_newline + 1
+        
+        chunk = text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        
+        # 오버랩을 고려한 다음 시작점
+        start = end - overlap
+        if start >= len(text):
+            break
+    
+    return chunks
+
+def get_file_info(uploaded_file) -> Dict[str, Any]:
+    """파일 정보 반환"""
+    return {
+        'name': uploaded_file.name,
+        'size': uploaded_file.size,
+        'type': uploaded_file.type,
+        'extension': uploaded_file.name.split('.')[-1].lower() if '.' in uploaded_file.name else ''
+    }
+
+def validate_file(uploaded_file) -> bool:
+    """파일 유효성 검사"""
+    if uploaded_file is None:
+        return False
+    
+    file_extension = uploaded_file.name.split('.')[-1].lower() if '.' in uploaded_file.name else ''
+    supported_extensions = get_supported_extensions()
+    
+    return file_extension in supported_extensions
+
+def process_multiple_files(uploaded_files) -> List[Document]:
+    """여러 파일 처리"""
+    all_documents = []
+    
+    for uploaded_file in uploaded_files:
+        try:
+            if validate_file(uploaded_file):
+                documents = process_file(uploaded_file)
+                all_documents.extend(documents)
+            else:
+                print(f"지원되지 않는 파일 형식: {uploaded_file.name}")
+        except Exception as e:
+            print(f"파일 처리 실패 {uploaded_file.name}: {e}")
+    
+    return all_documents
+
+if __name__ == "__main__":
+    # 테스트 코드
+    print("파일 처리 유틸리티")
+    print(f"지원되는 확장자: {get_supported_extensions()}") 

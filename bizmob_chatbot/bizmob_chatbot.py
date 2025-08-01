@@ -447,34 +447,37 @@ def save_to_chroma_store(documents: list) -> None:
                 
                 # 새로운 ChromaDB 클라이언트 방식 사용
                 chroma_path = get_chroma_db_path()
-            client = chromadb.PersistentClient(path=chroma_path)
-            
-            # 컬렉션 생성 또는 가져오기
-            collection_name = "bizmob_documents"
-            try:
-                collection = client.get_collection(name=collection_name)
-                logger.info("Existing collection found")
-            except:
-                collection = client.create_collection(name=collection_name)
-                logger.info("New collection created")
-            
-            # 문서를 ChromaDB에 저장
-            documents_texts = [doc.page_content for doc in documents]
-            documents_metadatas = [doc.metadata for doc in documents]
-            documents_ids = [f"doc_{i}" for i in range(len(documents))]
-            
-            # 임베딩 생성
-            embeddings_list = embeddings.embed_documents(documents_texts)
-            
-            # ChromaDB에 추가
-            collection.add(
-                documents=documents_texts,
-                embeddings=embeddings_list,
-                metadatas=documents_metadatas,
-                ids=documents_ids
-            )
-            
-            logger.info("ChromaDB document save completed")
+                
+                client = chromadb.PersistentClient(path=chroma_path)
+                
+                # 컬렉션 생성 또는 가져오기
+                collection_name = "bizmob_documents"
+                try:
+                    collection = client.get_collection(name=collection_name)
+                    logger.info("Existing collection found")
+                except:
+                    collection = client.create_collection(name=collection_name)
+                    logger.info("New collection created")
+                
+                # 문서를 ChromaDB에 저장
+                documents_texts = [doc.page_content for doc in documents]
+                documents_metadatas = [doc.metadata for doc in documents]
+                documents_ids = [f"doc_{i}" for i in range(len(documents))]
+                
+                # 임베딩 생성
+                embeddings_list = embeddings.embed_documents(documents_texts)
+                
+                # ChromaDB에 추가
+                collection.add(
+                    documents=documents_texts,
+                    embeddings=embeddings_list,
+                    metadatas=documents_metadatas,
+                    ids=documents_ids
+                )
+                
+                logger.info("ChromaDB document save completed")
+                st.success("✅ 벡터 데이터베이스 저장 완료 (ChromaDB 사용)")
+                logger.info("Vector database save successful")
                 
             except RuntimeError as e:
                 if "Numpy is not available" in str(e):
@@ -502,9 +505,6 @@ def save_to_chroma_store(documents: list) -> None:
                         return
                 else:
                     raise e
-            
-            st.success("✅ 벡터 데이터베이스 저장 완료 (ChromaDB 사용)")
-            logger.info("Vector database save successful")
         except RuntimeError as e:
             if "Numpy is not available" in str(e):
                 error_msg = "NumPy 오류가 발생했습니다. 터미널에서 다음 명령어를 실행하세요: pip uninstall numpy torch sentence-transformers && pip install numpy>=1.26.2 torch>=2.0.0 sentence-transformers>=2.2.0"

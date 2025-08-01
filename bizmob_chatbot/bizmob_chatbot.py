@@ -445,8 +445,8 @@ def save_to_chroma_store(documents: list) -> None:
                 import numpy as final_np
                 logger.info(f"Final NumPy check - version: {final_np.__version__}")
                 
-                            # 새로운 ChromaDB 클라이언트 방식 사용
-            chroma_path = get_chroma_db_path()
+                # 새로운 ChromaDB 클라이언트 방식 사용
+                chroma_path = get_chroma_db_path()
             client = chromadb.PersistentClient(path=chroma_path)
             
             # 컬렉션 생성 또는 가져오기

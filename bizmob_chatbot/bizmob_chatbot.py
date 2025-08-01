@@ -279,10 +279,31 @@ def save_to_chroma_store(documents: list) -> None:
             st.error(f"❌ {error_msg}")
             return
         
-        embeddings = HuggingFaceEmbeddings(model_name=selected_embedding)
-        logger.info("Embedding model loading completed")
-        
-        st.info(f"임베딩 모델 로딩 중: {selected_embedding}")
+        # HuggingFaceEmbeddings 초기화 전에 NumPy 강제 설정
+        try:
+            import numpy as np
+            import sys
+            
+            # 모든 관련 모듈에서 NumPy 강제 설정
+            sys.modules['numpy'] = np
+            
+            # SentenceTransformers에서 NumPy 강제 설정
+            try:
+                import sentence_transformers
+                sentence_transformers.np = np
+                logger.info("SentenceTransformers NumPy pre-override successful")
+            except Exception as e:
+                logger.warning(f"SentenceTransformers NumPy pre-override failed: {e}")
+            
+            # HuggingFaceEmbeddings 초기화
+            embeddings = HuggingFaceEmbeddings(model_name=selected_embedding)
+            logger.info("Embedding model loading completed")
+            
+            st.info(f"임베딩 모델 로딩 중: {selected_embedding}")
+        except Exception as e:
+            logger.error(f"Embedding model loading failed: {e}")
+            st.error(f"임베딩 모델 로딩 실패: {e}")
+            return
         
         # ChromaDB에 저장
         logger.info("ChromaDB document save started")
@@ -321,6 +342,31 @@ def save_to_chroma_store(documents: list) -> None:
                 logger.info("SentenceTransformers NumPy override successful")
             except Exception as e:
                 logger.warning(f"SentenceTransformers NumPy override failed: {e}")
+            
+            # ChromaDB에서 NumPy 사용 강제 설정
+            try:
+                import chromadb
+                if hasattr(chromadb, 'np'):
+                    chromadb.np = np
+                logger.info("ChromaDB NumPy override successful")
+            except Exception as e:
+                logger.warning(f"ChromaDB NumPy override failed: {e}")
+            
+            # LangChain에서 NumPy 사용 강제 설정
+            try:
+                import langchain_community
+                if hasattr(langchain_community, 'np'):
+                    langchain_community.np = np
+                logger.info("LangChain NumPy override successful")
+            except Exception as e:
+                logger.warning(f"LangChain NumPy override failed: {e}")
+            
+            # 모든 모듈에서 NumPy 사용 가능하도록 강제 설정
+            import builtins
+            if not hasattr(builtins, '_numpy_original'):
+                builtins._numpy_original = builtins.__dict__.get('numpy', None)
+                builtins.numpy = np
+                logger.info("Builtins NumPy override successful")
             
             vector_store = Chroma.from_documents(
                 documents=documents,

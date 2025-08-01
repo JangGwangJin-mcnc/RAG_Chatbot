@@ -315,6 +315,10 @@ def main():
         except:
             model_names = ['llama3.2', 'gemma3', 'mistral']
         
+        # model_names가 비어있으면 기본값 설정
+        if not model_names:
+            model_names = ['llama3.2', 'gemma3', 'mistral']
+        
         # 저장된 모델 정보 불러오기
         model_info_path = get_model_info_path()
         if os.path.exists(model_info_path):

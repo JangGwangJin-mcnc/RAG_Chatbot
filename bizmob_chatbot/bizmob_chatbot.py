@@ -26,15 +26,31 @@ def setup_logging():
     
     log_file = os.path.join(log_dir, f"bizmob_chatbot_{datetime.now().strftime('%Y%m%d')}.log")
     
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file, encoding='utf-8'),
-            logging.StreamHandler()
-        ]
-    )
-    return logging.getLogger(__name__)
+    # 기존 핸들러 제거
+    for handler in logging.root.handlers[:]:
+        logging.root.removeHandler(handler)
+    
+    # 로거 설정
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+    
+    # 파일 핸들러 (UTF-8 인코딩)
+    file_handler = logging.FileHandler(log_file, encoding='utf-8', mode='a')
+    file_handler.setLevel(logging.INFO)
+    file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(file_formatter)
+    
+    # 콘솔 핸들러
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    console_handler.setFormatter(console_formatter)
+    
+    # 핸들러 추가
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    
+    return logger
 
 # 로거 초기화
 logger = setup_logging()
@@ -55,18 +71,18 @@ except ImportError:
 # NumPy 강제 설치 확인 및 재설치
 try:
     import numpy
-    logger.info(f"NumPy 버전: {numpy.__version__}")
+    logger.info(f"NumPy version: {numpy.__version__}")
     
     # NumPy가 제대로 작동하는지 테스트
     test_array = numpy.array([1, 2, 3])
-    logger.info("NumPy 테스트 성공")
+    logger.info("NumPy test successful")
     
 except ImportError:
-    logger.error("NumPy가 설치되지 않았습니다.")
+    logger.error("NumPy is not installed")
     st.error("NumPy가 설치되지 않았습니다. pip install numpy>=1.26.2를 실행해주세요.")
     st.stop()
 except Exception as e:
-    logger.error(f"NumPy 오류: {e}")
+    logger.error(f"NumPy error: {e}")
     st.error(f"NumPy 오류가 발생했습니다. pip install numpy>=1.26.2를 실행해주세요.")
     st.stop()
 
@@ -174,7 +190,7 @@ def get_embedding_model():
 
 def initialize_vector_db():
     """벡터 데이터베이스 초기화"""
-    logger.info("벡터 데이터베이스 초기화 시작")
+    logger.info("Vector database initialization started")
     
     if not CHROMADB_AVAILABLE:
         error_msg = "ChromaDB가 설치되지 않았습니다."
@@ -185,9 +201,9 @@ def initialize_vector_db():
     try:
         # ChromaDB 디렉토리 생성
         chroma_path = get_chroma_db_path()
-        logger.info(f"ChromaDB 경로: {chroma_path}")
+        logger.info(f"ChromaDB path: {chroma_path}")
         os.makedirs(chroma_path, exist_ok=True)
-        logger.info("ChromaDB 디렉토리 생성 완료")
+        logger.info("ChromaDB directory created successfully")
         
         # 모델 정보 저장
         model_info = {
@@ -195,28 +211,29 @@ def initialize_vector_db():
             'embedding_model': st.session_state.get('selected_embedding_model', 'sentence-transformers/all-mpnet-base-v2'),
             'timestamp': pd.Timestamp.now().isoformat()
         }
-        logger.info(f"모델 정보: {model_info}")
+        logger.info(f"Model info: {model_info}")
         
         model_info_path = get_model_info_path()
-        logger.info(f"모델 정보 파일 경로: {model_info_path}")
+        logger.info(f"Model info file path: {model_info_path}")
         
         with open(model_info_path, 'w', encoding='utf-8') as f:
             json.dump(model_info, f, ensure_ascii=False, indent=2)
         
         st.session_state.vector_db_initialized = True
         st.success("✅ ChromaDB 벡터 데이터베이스 초기화 완료")
-        logger.info("벡터 데이터베이스 초기화 성공")
+        logger.info("Vector database initialization successful")
         return True
         
     except Exception as e:
         error_msg = f"벡터 데이터베이스 초기화 실패: {e}"
-        logger.error(error_msg, exc_info=True)
+        logger.error(f"Vector database initialization failed: {e}", exc_info=True)
         st.error(f"❌ {error_msg}")
         return False
 
 def save_to_chroma_store(documents: list) -> None:
     """문서를 ChromaDB에 저장"""
-    logger.info(f"벡터 데이터베이스 저장 시작 - 문서 수: {len(documents)}")
+    logger.info(f"Vector database save started - document count: {len(documents)}")
+    logger.info(f"Document preview: {[doc.page_content[:50] + '...' if len(doc.page_content) > 50 else doc.page_content for doc in documents[:3]]}")
     
     if not CHROMADB_AVAILABLE:
         error_msg = "ChromaDB가 설치되지 않았습니다."
@@ -226,17 +243,17 @@ def save_to_chroma_store(documents: list) -> None:
     
     try:
         selected_embedding = st.session_state.get('selected_embedding_model', 'sentence-transformers/all-mpnet-base-v2')
-        logger.info(f"임베딩 모델 로딩 시작: {selected_embedding}")
+        logger.info(f"Embedding model loading started: {selected_embedding}")
         
         # NumPy 재확인 및 강제 재설치 안내
         try:
             import numpy
-            logger.info(f"NumPy 재확인: {numpy.__version__}")
+            logger.info(f"NumPy recheck - version: {numpy.__version__}")
             
             # NumPy 기능 테스트
             test_array = numpy.array([1, 2, 3])
             test_result = numpy.sum(test_array)
-            logger.info(f"NumPy 기능 테스트 성공: {test_result}")
+            logger.info(f"NumPy function test successful - result: {test_result}")
             
         except ImportError:
             error_msg = "NumPy가 설치되지 않았습니다. 터미널에서 다음 명령어를 실행하세요: pip install numpy>=1.26.2"
@@ -250,12 +267,12 @@ def save_to_chroma_store(documents: list) -> None:
             return
         
         embeddings = HuggingFaceEmbeddings(model_name=selected_embedding)
-        logger.info("임베딩 모델 로딩 완료")
+        logger.info("Embedding model loading completed")
         
         st.info(f"임베딩 모델 로딩 중: {selected_embedding}")
         
         # ChromaDB에 저장
-        logger.info("ChromaDB에 문서 저장 시작")
+        logger.info("ChromaDB document save started")
         try:
             # NumPy 강제 재설정
             import numpy as np
@@ -267,7 +284,16 @@ def save_to_chroma_store(documents: list) -> None:
             
             # NumPy 배열 테스트
             test_embeddings = np.array([[1.0, 2.0, 3.0]])
-            logger.info(f"NumPy 배열 테스트 성공: {test_embeddings.shape}")
+            logger.info(f"NumPy array test successful - shape: {test_embeddings.shape}")
+            
+            # PyTorch 텐서를 NumPy로 변환 테스트
+            torch_tensor = torch.tensor([[1.0, 2.0, 3.0]])
+            numpy_array = torch_tensor.numpy()
+            logger.info(f"PyTorch -> NumPy conversion test successful - shape: {numpy_array.shape}")
+            
+            # SentenceTransformers에서 NumPy 사용 강제 설정
+            import os
+            os.environ['TOKENIZERS_PARALLELISM'] = 'false'
             
             vector_store = Chroma.from_documents(
                 documents=documents,
@@ -275,13 +301,13 @@ def save_to_chroma_store(documents: list) -> None:
                 persist_directory=get_chroma_db_path()
             )
             vector_store.persist()
-            logger.info("ChromaDB 문서 저장 완료")
+            logger.info("ChromaDB document save completed")
             
             st.success("✅ 벡터 데이터베이스 저장 완료 (ChromaDB 사용)")
-            logger.info("벡터 데이터베이스 저장 성공")
+            logger.info("Vector database save successful")
         except RuntimeError as e:
             if "Numpy is not available" in str(e):
-                error_msg = "NumPy 오류가 발생했습니다. 터미널에서 다음 명령어를 실행하세요: pip uninstall numpy torch && pip install numpy>=1.26.2 torch>=2.0.0"
+                error_msg = "NumPy 오류가 발생했습니다. 터미널에서 다음 명령어를 실행하세요: pip uninstall numpy torch sentence-transformers && pip install numpy>=1.26.2 torch>=2.0.0 sentence-transformers>=2.2.0"
                 logger.error(error_msg)
                 st.error(f"❌ {error_msg}")
                 st.info("💡 팁: 가상환경을 사용 중이라면 가상환경을 비활성화하고 다시 활성화한 후 설치해보세요.")
@@ -290,12 +316,12 @@ def save_to_chroma_store(documents: list) -> None:
         
     except Exception as e:
         error_msg = f"벡터 데이터베이스 저장 실패: {e}"
-        logger.error(error_msg, exc_info=True)
+        logger.error(f"Vector database save failed: {e}", exc_info=True)
         st.error(f"❌ {error_msg}")
 
 def load_chroma_store():
     """ChromaDB에서 벡터 스토어 로드"""
-    logger.info("ChromaDB 벡터 스토어 로드 시작")
+    logger.info("ChromaDB vector store loading started")
     
     if not CHROMADB_AVAILABLE:
         error_msg = "ChromaDB가 설치되지 않았습니다."
@@ -305,7 +331,7 @@ def load_chroma_store():
     
     try:
         chroma_path = get_chroma_db_path()
-        logger.info(f"ChromaDB 경로: {chroma_path}")
+        logger.info(f"ChromaDB path: {chroma_path}")
         
         # ChromaDB 디렉토리 존재 확인
         if not os.path.exists(chroma_path):
@@ -314,34 +340,34 @@ def load_chroma_store():
             st.error(f"❌ {error_msg}")
             return None
         
-        logger.info("임베딩 모델 로딩 시작")
+        logger.info("Embedding model loading started")
         embeddings = get_embedding_model()
-        logger.info("임베딩 모델 로딩 완료")
+        logger.info("Embedding model loading completed")
         
-        logger.info("ChromaDB 벡터 스토어 생성 시작")
+        logger.info("ChromaDB vector store creation started")
         vector_store = Chroma(
             persist_directory=chroma_path,
             embedding_function=embeddings
         )
-        logger.info("ChromaDB 벡터 스토어 생성 완료")
+        logger.info("ChromaDB vector store creation completed")
         
         # 벡터 스토어 정보 로깅
         try:
             collection_count = vector_store._collection.count()
-            logger.info(f"ChromaDB 컬렉션 문서 수: {collection_count}")
+            logger.info(f"ChromaDB collection document count: {collection_count}")
         except Exception as e:
-            logger.warning(f"컬렉션 정보 확인 실패: {e}")
+            logger.warning(f"Collection info check failed: {e}")
         
         return vector_store
     except Exception as e:
         error_msg = f"ChromaDB 로드 실패: {e}"
-        logger.error(error_msg, exc_info=True)
+        logger.error(f"ChromaDB load failed: {e}", exc_info=True)
         st.error(f"❌ {error_msg}")
         return None
 
 def get_rag_chain():
     """RAG 체인 생성"""
-    logger.info("RAG 체인 생성 시작")
+    logger.info("RAG chain creation started")
     
     if not CHROMADB_AVAILABLE:
         error_msg = "ChromaDB가 설치되지 않았습니다."
@@ -352,24 +378,24 @@ def get_rag_chain():
     try:
         # 선택된 모델 가져오기
         selected_model = st.session_state.get('selected_model', 'llama3.2')
-        logger.info(f"선택된 AI 모델: {selected_model}")
+        logger.info(f"Selected AI model: {selected_model}")
         
         # Ollama LLM 초기화
-        logger.info("Ollama LLM 초기화 시작")
+        logger.info("Ollama LLM initialization started")
         llm = Ollama(model=selected_model)
-        logger.info("Ollama LLM 초기화 완료")
+        logger.info("Ollama LLM initialization completed")
         
         # ChromaDB 벡터 스토어 로드
-        logger.info("ChromaDB 벡터 스토어 로드 시작")
+        logger.info("ChromaDB vector store loading started")
         vector_store = load_chroma_store()
         if vector_store is None:
             error_msg = "벡터 스토어 로드 실패"
             logger.error(error_msg)
             return None
-        logger.info("ChromaDB 벡터 스토어 로드 완료")
+        logger.info("ChromaDB vector store loading completed")
         
         # 프롬프트 템플릿
-        logger.info("프롬프트 템플릿 생성")
+        logger.info("Prompt template creation")
         prompt_template = """다음 컨텍스트를 사용하여 질문에 답변하세요:
 
 컨텍스트: {context}
@@ -384,26 +410,26 @@ def get_rag_chain():
         )
         
         # RAG 체인 생성
-        logger.info("RAG 체인 생성 시작")
+        logger.info("RAG chain creation started")
         chain = RetrievalQA.from_chain_type(
             llm=llm,
             chain_type="stuff",
             retriever=vector_store.as_retriever(search_kwargs={"k": 5}),
             chain_type_kwargs={"prompt": prompt}
         )
-        logger.info("RAG 체인 생성 완료")
+        logger.info("RAG chain creation completed")
         
         return chain
         
     except Exception as e:
         error_msg = f"RAG 체인 생성 실패: {e}"
-        logger.error(error_msg, exc_info=True)
+        logger.error(f"RAG chain creation failed: {e}", exc_info=True)
         st.error(f"❌ {error_msg}")
         return None
 
 def process_question(question: str) -> str:
     """질문 처리"""
-    logger.info(f"질문 처리 시작: {question[:50]}...")
+    logger.info(f"Question processing started: {question[:50]}...")
     
     if not CHROMADB_AVAILABLE:
         error_msg = "ChromaDB가 설치되지 않았습니다."
@@ -412,24 +438,24 @@ def process_question(question: str) -> str:
     
     try:
         # RAG 체인 가져오기
-        logger.info("RAG 체인 가져오기 시작")
+        logger.info("RAG chain retrieval started")
         chain = get_rag_chain()
         if chain is None:
             error_msg = "벡터 데이터베이스를 로드할 수 없습니다."
             logger.error(error_msg)
             return error_msg
-        logger.info("RAG 체인 가져오기 완료")
+        logger.info("RAG chain retrieval completed")
         
         # 질문 처리
-        logger.info("질문 처리 실행 시작")
+        logger.info("Question processing execution started")
         response = chain.invoke({"query": question})
         result = response.get("result", "답변을 생성할 수 없습니다.")
-        logger.info(f"질문 처리 완료 - 답변 길이: {len(result)}")
+        logger.info(f"Question processing completed - answer length: {len(result)}")
         return result
         
     except Exception as e:
         error_msg = f"질문 처리 중 오류 발생: {e}"
-        logger.error(error_msg, exc_info=True)
+        logger.error(f"Question processing error occurred: {e}", exc_info=True)
         return error_msg
 
 def main():

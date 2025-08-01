@@ -396,6 +396,17 @@ def save_to_chroma_store(documents: list) -> None:
                 import chromadb
                 if hasattr(chromadb, 'np'):
                     chromadb.np = np
+                # ChromaDB 내부 모듈들에도 NumPy 설정
+                try:
+                    import chromadb.api
+                    chromadb.api.np = np
+                except:
+                    pass
+                try:
+                    import chromadb.config
+                    chromadb.config.np = np
+                except:
+                    pass
                 logger.info("ChromaDB NumPy override successful")
             except Exception as e:
                 logger.warning(f"ChromaDB NumPy override failed: {e}")
@@ -405,6 +416,12 @@ def save_to_chroma_store(documents: list) -> None:
                 import langchain_community
                 if hasattr(langchain_community, 'np'):
                     langchain_community.np = np
+                # LangChain 내부 모듈들에도 NumPy 설정
+                try:
+                    import langchain_community.vectorstores
+                    langchain_community.vectorstores.np = np
+                except:
+                    pass
                 logger.info("LangChain NumPy override successful")
             except Exception as e:
                 logger.warning(f"LangChain NumPy override failed: {e}")
@@ -416,13 +433,52 @@ def save_to_chroma_store(documents: list) -> None:
                 builtins.numpy = np
                 logger.info("Builtins NumPy override successful")
             
-            vector_store = Chroma.from_documents(
-                documents=documents,
-                embedding=embeddings,
-                persist_directory=get_chroma_db_path()
-            )
-            vector_store.persist()
-            logger.info("ChromaDB document save completed")
+            # ChromaDB 초기화 전에 추가 환경 변수 설정
+            import os
+            os.environ['CHROMA_DB_IMPL'] = 'duckdb+parquet'
+            os.environ['CHROMA_SERVER_HOST'] = 'localhost'
+            os.environ['CHROMA_SERVER_HTTP_PORT'] = '8000'
+            
+            # ChromaDB 저장 전에 최종 NumPy 확인
+            try:
+                import numpy as final_np
+                logger.info(f"Final NumPy check - version: {final_np.__version__}")
+                
+                # ChromaDB 저장 시도
+                vector_store = Chroma.from_documents(
+                    documents=documents,
+                    embedding=embeddings,
+                    persist_directory=get_chroma_db_path()
+                )
+                vector_store.persist()
+                logger.info("ChromaDB document save completed")
+                
+            except RuntimeError as e:
+                if "Numpy is not available" in str(e):
+                    # 마지막 시도: ChromaDB를 직접 초기화
+                    try:
+                        import chromadb
+                        client = chromadb.PersistentClient(path=get_chroma_db_path())
+                        collection = client.create_collection(name="bizmob_documents")
+                        
+                        # 문서를 직접 추가
+                        for i, doc in enumerate(documents):
+                            collection.add(
+                                documents=[doc.page_content],
+                                metadatas=[doc.metadata],
+                                ids=[f"doc_{i}"]
+                            )
+                        
+                        logger.info("ChromaDB direct save completed")
+                        st.success("✅ 벡터 데이터베이스 저장 완료 (직접 저장)")
+                        return
+                    except Exception as direct_error:
+                        error_msg = f"직접 저장도 실패: {direct_error}. 터미널에서 다음 명령어를 실행하세요: pip uninstall numpy torch sentence-transformers && pip install numpy>=1.26.2 torch>=2.0.0 sentence-transformers>=2.2.0"
+                        logger.error(error_msg)
+                        st.error(f"❌ {error_msg}")
+                        return
+                else:
+                    raise e
             
             st.success("✅ 벡터 데이터베이스 저장 완료 (ChromaDB 사용)")
             logger.info("Vector database save successful")

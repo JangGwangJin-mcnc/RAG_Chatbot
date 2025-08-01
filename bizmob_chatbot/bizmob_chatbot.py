@@ -448,7 +448,8 @@ def save_to_chroma_store(documents: list) -> None:
                 # 새로운 ChromaDB 클라이언트 방식 사용
                 chroma_path = get_chroma_db_path()
                 
-                client = chromadb.PersistentClient(path=chroma_path)
+                # 새로운 ChromaDB 클라이언트 생성
+                client = chromadb.Client()
                 
                 # 컬렉션 생성 또는 가져오기
                 collection_name = "bizmob_documents"
@@ -484,7 +485,7 @@ def save_to_chroma_store(documents: list) -> None:
                     # 마지막 시도: ChromaDB를 직접 초기화
                     try:
                         import chromadb
-                        client = chromadb.PersistentClient(path=get_chroma_db_path())
+                        client = chromadb.Client()
                         collection = client.create_collection(name="bizmob_documents")
                         
                         # 문서를 직접 추가
@@ -545,7 +546,7 @@ def load_chroma_store():
         logger.info("Embedding model loading completed")
         
         # 새로운 ChromaDB 클라이언트 방식 사용
-        client = chromadb.PersistentClient(path=chroma_path)
+        client = chromadb.Client()
         
         # 컬렉션 가져오기
         collection_name = "bizmob_documents"

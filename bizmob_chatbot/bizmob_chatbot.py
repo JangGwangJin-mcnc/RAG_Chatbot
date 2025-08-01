@@ -257,6 +257,18 @@ def save_to_chroma_store(documents: list) -> None:
         # ChromaDB에 저장
         logger.info("ChromaDB에 문서 저장 시작")
         try:
+            # NumPy 강제 재설정
+            import numpy as np
+            import torch
+            
+            # PyTorch에서 NumPy 사용 가능하도록 설정
+            if hasattr(torch, 'set_default_tensor_type'):
+                torch.set_default_tensor_type('torch.FloatTensor')
+            
+            # NumPy 배열 테스트
+            test_embeddings = np.array([[1.0, 2.0, 3.0]])
+            logger.info(f"NumPy 배열 테스트 성공: {test_embeddings.shape}")
+            
             vector_store = Chroma.from_documents(
                 documents=documents,
                 embedding=embeddings,
@@ -269,7 +281,7 @@ def save_to_chroma_store(documents: list) -> None:
             logger.info("벡터 데이터베이스 저장 성공")
         except RuntimeError as e:
             if "Numpy is not available" in str(e):
-                error_msg = "NumPy 오류가 발생했습니다. 터미널에서 다음 명령어를 실행하세요: pip uninstall numpy && pip install numpy>=1.26.2"
+                error_msg = "NumPy 오류가 발생했습니다. 터미널에서 다음 명령어를 실행하세요: pip uninstall numpy torch && pip install numpy>=1.26.2 torch>=2.0.0"
                 logger.error(error_msg)
                 st.error(f"❌ {error_msg}")
                 st.info("💡 팁: 가상환경을 사용 중이라면 가상환경을 비활성화하고 다시 활성화한 후 설치해보세요.")

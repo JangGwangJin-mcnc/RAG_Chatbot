@@ -13,7 +13,7 @@ EXTERNAL_SOURCE_EXTS = [
 ]
 
 def get_vector_db_path():
-    ai_model = st.session_state.get('selected_model', 'hyperclovax')
+    ai_model = st.session_state.get('selected_model', 'llama3.2')
     import re
     safe_model = re.sub(r'[^a-zA-Z0-9_\-]', '_', ai_model)
     return f"bizmob_faiss_index_{safe_model}"
@@ -76,8 +76,8 @@ def load_all_documents_from_folder(folder_path: str = "PDF_bizMOB_Guide") -> lis
 
 def save_to_vector_store(documents: list) -> None:
     try:
-        embeddings = HuggingFaceEmbeddings(model_name=st.session_state.get('selected_embedding_model', 'jhgan/ko-sroberta-multitask'))
-        selected_embedding = st.session_state.get('selected_embedding_model', 'jhgan/ko-sroberta-multitask')
+        embeddings = HuggingFaceEmbeddings(model_name=st.session_state.get('selected_embedding_model', 'sentence-transformers/all-mpnet-base-v2'))
+        selected_embedding = st.session_state.get('selected_embedding_model', 'sentence-transformers/all-mpnet-base-v2')
         st.info(f"임베딩 모델 로딩 중: {selected_embedding}")
         vector_store = FAISS.from_documents(documents, embedding=embeddings)
         vector_store.save_local(get_vector_db_path())
@@ -86,7 +86,7 @@ def save_to_vector_store(documents: list) -> None:
         st.error(f"❌ 벡터 데이터베이스 저장 실패: {str(e)}")
 
 def get_model_info_path():
-    ai_model = st.session_state.get('selected_model', 'hyperclovax')
+    ai_model = st.session_state.get('selected_model', 'llama3.2')
     import re
     safe_model = re.sub(r'[^a-zA-Z0-9_\-]', '_', ai_model)
     return f"vector_db_model_info_{safe_model}.json"
@@ -103,8 +103,8 @@ def initialize_vector_db():
         save_to_vector_store(chunked_documents)
         try:
             model_info = {
-                'ai_model': st.session_state.get('selected_model', 'hyperclovax'),
-                'embedding_model': st.session_state.get('selected_embedding_model', 'jhgan/ko-sroberta-multitask'),
+                'ai_model': st.session_state.get('selected_model', 'llama3.2'),
+                'embedding_model': st.session_state.get('selected_embedding_model', 'sentence-transformers/all-mpnet-base-v2'),
                 'timestamp': pd.Timestamp.now().isoformat()
             }
             import json

@@ -804,9 +804,26 @@ def save_to_vector_store(documents: List[Document]) -> None:
         selected_embedding = st.session_state.get('selected_embedding_model', 'jhgan/ko-sroberta-multitask')
         
         st.info(f"임베딩 모델 로딩 중: {selected_embedding}")
-        vector_store = FAISS.from_documents(documents, embedding=embeddings)
-        vector_store.save_local(get_vector_db_path())
-        st.success("✅ 벡터 데이터베이스 저장 완료 (선택된 임베딩 모델 사용)")
+        
+        # PyTorch 보안 취약점 해결을 위해 ChromaDB 사용
+        try:
+            from langchain_community.vectorstores import Chroma
+            vector_store = Chroma.from_documents(
+                documents=documents,
+                embedding=embeddings,
+                persist_directory="./chroma_db"
+            )
+            vector_store.persist()
+            st.success("✅ 벡터 데이터베이스 저장 완료 (ChromaDB 사용)")
+        except ImportError:
+            # ChromaDB가 없는 경우 FAISS 사용 (경고 억제)
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                vector_store = FAISS.from_documents(documents, embedding=embeddings)
+                vector_store.save_local(get_vector_db_path())
+            st.success("✅ 벡터 데이터베이스 저장 완료 (FAISS 사용)")
+            
     except Exception as e:
         st.error(f"❌ 벡터 데이터베이스 저장 실패: {str(e)}")
 
@@ -833,8 +850,8 @@ def initialize_vector_db():
         # 성공적으로 초기화된 모델 정보를 파일에 저장
         try:
             model_info = {
-                'ai_model': st.session_state.get('selected_model', 'hyperclovax'),
-                'embedding_model': st.session_state.get('selected_embedding_model', 'jhgan/ko-sroberta-multitask'),
+                'ai_model': st.session_state.get('selected_model', 'llama3.2'),
+                'embedding_model': st.session_state.get('selected_embedding_model', 'sentence-transformers/all-mpnet-base-v2'),
                 'timestamp': pd.Timestamp.now().isoformat()
             }
             
@@ -865,7 +882,21 @@ def process_question(user_question):
         
         # 관련 문서는 하이브리드 검색으로 검색 (참조용)
         embeddings = get_embedding_model()
-        new_db = FAISS.load_local(get_vector_db_path(), embeddings, allow_dangerous_deserialization=True)
+        
+        # ChromaDB 또는 FAISS 사용
+        try:
+            from langchain_community.vectorstores import Chroma
+            new_db = Chroma(
+                persist_directory="./chroma_db",
+                embedding_function=embeddings
+            )
+        except ImportError:
+            # ChromaDB가 없는 경우 FAISS 사용 (경고 억제)
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                new_db = FAISS.load_local(get_vector_db_path(), embeddings, allow_dangerous_deserialization=True)
+        
         hybrid_retriever = HybridRetriever(
             vector_store=new_db,
             semantic_weight=0.5,
@@ -882,7 +913,7 @@ def get_rag_chain() -> Runnable:
     """RAG 체인 생성"""
     try:
         # 선택된 모델 가져오기
-        selected_model = st.session_state.get('selected_model', 'hyperclovax')
+        selected_model = st.session_state.get('selected_model', 'llama3.2')
         
         # Ollama LLM 초기화
         llm = OllamaLLM(
@@ -895,8 +926,19 @@ def get_rag_chain() -> Runnable:
         # 선택된 임베딩 모델 사용
         embeddings = get_embedding_model()
         
-        # 벡터 스토어 로드 (allow_dangerous_deserialization=True 추가)
-        vector_store = FAISS.load_local(get_vector_db_path(), embeddings, allow_dangerous_deserialization=True)
+        # 벡터 스토어 로드 (ChromaDB 우선 사용)
+        try:
+            from langchain_community.vectorstores import Chroma
+            vector_store = Chroma(
+                persist_directory="./chroma_db",
+                embedding_function=embeddings
+            )
+        except ImportError:
+            # ChromaDB가 없는 경우 FAISS 사용 (경고 억제)
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                vector_store = FAISS.load_local(get_vector_db_path(), embeddings, allow_dangerous_deserialization=True)
         
         # 프롬프트 템플릿
         template = """당신은 bizMOB Platform 전문가입니다. 
@@ -1078,7 +1120,7 @@ def get_embedding_model():
 def get_recommended_embedding_model(ai_model_name: str) -> str:
     """AI 모델에 따른 권장 임베딩 모델을 반환"""
     model_mapping = {
-        'hyperclovax': 'jhgan/ko-sroberta-multitask',
+        'llama3.2': 'sentence-transformers/all-mpnet-base-v2',
         'llama3.2': 'sentence-transformers/all-mpnet-base-v2',
         'llama3.2:3b': 'sentence-transformers/all-MiniLM-L6-v2',
         'llama3.2:8b': 'sentence-transformers/all-mpnet-base-v2',
@@ -1107,11 +1149,11 @@ def get_recommended_embedding_model(ai_model_name: str) -> str:
     for key, value in model_mapping.items():
         if key in ai_model_name.lower():
             return value
-    return 'jhgan/ko-sroberta-multitask'
+    return 'sentence-transformers/all-mpnet-base-v2'
 
 def get_vector_db_path():
     """현재 선택된 AI 모델에 맞는 벡터DB 경로 반환"""
-    ai_model = st.session_state.get('selected_model', 'hyperclovax')
+    ai_model = st.session_state.get('selected_model', 'llama3.2')
     # 파일명에 사용할 수 없는 문자는 언더스코어로 대체
     safe_model = re.sub(r'[^a-zA-Z0-9_\-]', '_', ai_model)
     vector_db_path = f"bizmob_faiss_index_{safe_model}"
@@ -1138,7 +1180,7 @@ def main():
 
     # session_state 초기화
     if 'selected_model' not in st.session_state:
-        st.session_state.selected_model = 'hyperclovax'
+        st.session_state.selected_model = 'llama3.2'
     if 'selected_embedding_model' not in st.session_state:
         st.session_state.selected_embedding_model = 'sentence-transformers/all-MiniLM-L6-v2'
     if 'vector_db_initialized' not in st.session_state:
@@ -1188,18 +1230,18 @@ def main():
                             st.session_state.selected_embedding_model = saved_model_info['embedding_model']
                         st.sidebar.success(f"✅ 저장된 모델 정보를 불러왔습니다: {saved_ai_model}")
                     else:
-                        # 저장된 모델이 없으면 hyperclovax 또는 첫 번째 모델
+                        # 저장된 모델이 없으면 llama3.2 또는 첫 번째 모델
                         default_index = 0
                         for i, name in enumerate(model_names):
-                            if 'hyperclovax' in name.lower():
+                            if 'llama3.2' in name.lower():
                                 default_index = i
                                 break
                         st.session_state.selected_model = model_names[default_index]
                 else:
-                    # 저장된 정보가 없으면 hyperclovax 또는 첫 번째 모델
+                    # 저장된 정보가 없으면 llama3.2 또는 첫 번째 모델
                     default_index = 0
                     for i, name in enumerate(model_names):
-                        if 'hyperclovax' in name.lower():
+                        if 'llama3.2' in name.lower():
                             default_index = i
                             break
                     st.session_state.selected_model = model_names[default_index]
@@ -1250,10 +1292,10 @@ def main():
         current_embedding = st.session_state.selected_embedding_model
     else:
         # selected_model이 초기화되지 않은 경우 기본값 사용
-        selected_model = st.session_state.get('selected_model', 'hyperclovax')
+        selected_model = st.session_state.get('selected_model', 'llama3.2')
         # selected_model이 None이거나 빈 문자열인 경우 기본값 사용
         if not selected_model:
-            selected_model = 'hyperclovax'
+            selected_model = 'llama3.2'
             st.session_state.selected_model = selected_model
         current_embedding = get_recommended_embedding_model(selected_model)
         st.session_state.selected_embedding_model = current_embedding
@@ -1326,9 +1368,9 @@ def main():
         st.header("📱 bizMOB Platform 챗봇")
         st.markdown("PDF_bizMOB_Guide 폴더의 bizMOB Platform 가이드 문서를 기반으로 질문에 답변합니다.")
         # 동적으로 AI 모델명 안내
-        ai_model_name = st.session_state.get('selected_model', 'hyperclovax')
-        if 'hyperclovax' in ai_model_name.lower():
-            model_display = '네이버 HyperCLOVAX 모델'
+        ai_model_name = st.session_state.get('selected_model', 'llama3.2')
+        if 'llama3.2' in ai_model_name.lower():
+            model_display = 'Meta Llama 3.2 모델'
         else:
             model_display = f"Ollama AI 모델: {ai_model_name}"
         st.info(f"💡 **{model_display}를 사용하여 PDF, Excel, PowerPoint, Word 문서의 내용을 분석하고 질문에 답변합니다.**")
@@ -1338,7 +1380,7 @@ def main():
         
         with tab1:
             # 현재 선택된 모델 정보 표시
-            selected_model = st.session_state.get('selected_model', 'hyperclovax')
+            selected_model = st.session_state.get('selected_model', 'llama3.2')
             if selected_model:
                 # 저장된 모델 정보가 있는지 확인
                 saved_model_info = load_saved_model_info()

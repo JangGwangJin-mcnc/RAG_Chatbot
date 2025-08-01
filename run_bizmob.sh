@@ -27,6 +27,13 @@ cd "$SCRIPT_DIR/bizmob_chatbot"
 echo "Applying PyTorch security fixes..."
 python ../fix_torch_vulnerability.py
 
+# Install ChromaDB if not available
+echo "Checking ChromaDB availability..."
+python -c "import chromadb" 2>/dev/null || {
+    echo "Installing ChromaDB..."
+    pip install chromadb
+}
+
 # Set additional environment variables
 export TORCH_WARN_ON_LOAD=0
 export TORCH_LOAD_WARN_ONLY=0

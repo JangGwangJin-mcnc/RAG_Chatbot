@@ -13,4 +13,5 @@ python-pptx
 python-docx
 unstructured
 torch>=2.2.0
-transformers>=4.30.0 
+transformers>=4.30.0
+chromadb 

@@ -10,12 +10,34 @@ import sys
 import json
 import pandas as pd
 import re
+import logging
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 import warnings
 
 # 경고 억제
 warnings.filterwarnings("ignore")
+
+# 로깅 설정
+def setup_logging():
+    """로깅 설정"""
+    log_dir = "./logs"
+    os.makedirs(log_dir, exist_ok=True)
+    
+    log_file = os.path.join(log_dir, f"bizmob_chatbot_{datetime.now().strftime('%Y%m%d')}.log")
+    
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file, encoding='utf-8'),
+            logging.StreamHandler()
+        ]
+    )
+    return logging.getLogger(__name__)
+
+# 로거 초기화
+logger = setup_logging()
 
 # 환경 변수 설정
 os.environ['TORCH_WARN_ON_LOAD'] = '0'
@@ -134,14 +156,20 @@ def get_embedding_model():
 
 def initialize_vector_db():
     """벡터 데이터베이스 초기화"""
+    logger.info("벡터 데이터베이스 초기화 시작")
+    
     if not CHROMADB_AVAILABLE:
-        st.error("ChromaDB가 설치되지 않았습니다.")
+        error_msg = "ChromaDB가 설치되지 않았습니다."
+        logger.error(error_msg)
+        st.error(error_msg)
         return False
     
     try:
         # ChromaDB 디렉토리 생성
         chroma_path = get_chroma_db_path()
+        logger.info(f"ChromaDB 경로: {chroma_path}")
         os.makedirs(chroma_path, exist_ok=True)
+        logger.info("ChromaDB 디렉토리 생성 완료")
         
         # 모델 정보 저장
         model_info = {
@@ -149,79 +177,139 @@ def initialize_vector_db():
             'embedding_model': st.session_state.get('selected_embedding_model', 'sentence-transformers/all-mpnet-base-v2'),
             'timestamp': pd.Timestamp.now().isoformat()
         }
+        logger.info(f"모델 정보: {model_info}")
         
-        with open(get_model_info_path(), 'w', encoding='utf-8') as f:
+        model_info_path = get_model_info_path()
+        logger.info(f"모델 정보 파일 경로: {model_info_path}")
+        
+        with open(model_info_path, 'w', encoding='utf-8') as f:
             json.dump(model_info, f, ensure_ascii=False, indent=2)
         
         st.session_state.vector_db_initialized = True
         st.success("✅ ChromaDB 벡터 데이터베이스 초기화 완료")
+        logger.info("벡터 데이터베이스 초기화 성공")
         return True
         
     except Exception as e:
-        st.error(f"❌ 벡터 데이터베이스 초기화 실패: {e}")
+        error_msg = f"벡터 데이터베이스 초기화 실패: {e}"
+        logger.error(error_msg, exc_info=True)
+        st.error(f"❌ {error_msg}")
         return False
 
 def save_to_chroma_store(documents: list) -> None:
     """문서를 ChromaDB에 저장"""
+    logger.info(f"벡터 데이터베이스 저장 시작 - 문서 수: {len(documents)}")
+    
     if not CHROMADB_AVAILABLE:
-        st.error("ChromaDB가 설치되지 않았습니다.")
+        error_msg = "ChromaDB가 설치되지 않았습니다."
+        logger.error(error_msg)
+        st.error(error_msg)
         return
     
     try:
         selected_embedding = st.session_state.get('selected_embedding_model', 'sentence-transformers/all-mpnet-base-v2')
+        logger.info(f"임베딩 모델 로딩 시작: {selected_embedding}")
+        
         embeddings = HuggingFaceEmbeddings(model_name=selected_embedding)
+        logger.info("임베딩 모델 로딩 완료")
         
         st.info(f"임베딩 모델 로딩 중: {selected_embedding}")
         
         # ChromaDB에 저장
+        logger.info("ChromaDB에 문서 저장 시작")
         vector_store = Chroma.from_documents(
             documents=documents,
             embedding=embeddings,
             persist_directory=get_chroma_db_path()
         )
         vector_store.persist()
+        logger.info("ChromaDB 문서 저장 완료")
         
         st.success("✅ 벡터 데이터베이스 저장 완료 (ChromaDB 사용)")
+        logger.info("벡터 데이터베이스 저장 성공")
         
     except Exception as e:
-        st.error(f"❌ 벡터 데이터베이스 저장 실패: {e}")
+        error_msg = f"벡터 데이터베이스 저장 실패: {e}"
+        logger.error(error_msg, exc_info=True)
+        st.error(f"❌ {error_msg}")
 
 def load_chroma_store():
     """ChromaDB에서 벡터 스토어 로드"""
+    logger.info("ChromaDB 벡터 스토어 로드 시작")
+    
     if not CHROMADB_AVAILABLE:
-        st.error("ChromaDB가 설치되지 않았습니다.")
+        error_msg = "ChromaDB가 설치되지 않았습니다."
+        logger.error(error_msg)
+        st.error(error_msg)
         return None
     
     try:
+        chroma_path = get_chroma_db_path()
+        logger.info(f"ChromaDB 경로: {chroma_path}")
+        
+        # ChromaDB 디렉토리 존재 확인
+        if not os.path.exists(chroma_path):
+            error_msg = f"ChromaDB 디렉토리가 존재하지 않습니다: {chroma_path}"
+            logger.error(error_msg)
+            st.error(f"❌ {error_msg}")
+            return None
+        
+        logger.info("임베딩 모델 로딩 시작")
         embeddings = get_embedding_model()
+        logger.info("임베딩 모델 로딩 완료")
+        
+        logger.info("ChromaDB 벡터 스토어 생성 시작")
         vector_store = Chroma(
-            persist_directory=get_chroma_db_path(),
+            persist_directory=chroma_path,
             embedding_function=embeddings
         )
+        logger.info("ChromaDB 벡터 스토어 생성 완료")
+        
+        # 벡터 스토어 정보 로깅
+        try:
+            collection_count = vector_store._collection.count()
+            logger.info(f"ChromaDB 컬렉션 문서 수: {collection_count}")
+        except Exception as e:
+            logger.warning(f"컬렉션 정보 확인 실패: {e}")
+        
         return vector_store
     except Exception as e:
-        st.error(f"❌ ChromaDB 로드 실패: {e}")
+        error_msg = f"ChromaDB 로드 실패: {e}"
+        logger.error(error_msg, exc_info=True)
+        st.error(f"❌ {error_msg}")
         return None
 
 def get_rag_chain():
     """RAG 체인 생성"""
+    logger.info("RAG 체인 생성 시작")
+    
     if not CHROMADB_AVAILABLE:
-        st.error("ChromaDB가 설치되지 않았습니다.")
+        error_msg = "ChromaDB가 설치되지 않았습니다."
+        logger.error(error_msg)
+        st.error(error_msg)
         return None
     
     try:
         # 선택된 모델 가져오기
         selected_model = st.session_state.get('selected_model', 'llama3.2')
+        logger.info(f"선택된 AI 모델: {selected_model}")
         
         # Ollama LLM 초기화
+        logger.info("Ollama LLM 초기화 시작")
         llm = Ollama(model=selected_model)
+        logger.info("Ollama LLM 초기화 완료")
         
         # ChromaDB 벡터 스토어 로드
+        logger.info("ChromaDB 벡터 스토어 로드 시작")
         vector_store = load_chroma_store()
         if vector_store is None:
+            error_msg = "벡터 스토어 로드 실패"
+            logger.error(error_msg)
             return None
+        logger.info("ChromaDB 벡터 스토어 로드 완료")
         
         # 프롬프트 템플릿
+        logger.info("프롬프트 템플릿 생성")
         prompt_template = """다음 컨텍스트를 사용하여 질문에 답변하세요:
 
 컨텍스트: {context}
@@ -236,36 +324,53 @@ def get_rag_chain():
         )
         
         # RAG 체인 생성
+        logger.info("RAG 체인 생성 시작")
         chain = RetrievalQA.from_chain_type(
             llm=llm,
             chain_type="stuff",
             retriever=vector_store.as_retriever(search_kwargs={"k": 5}),
             chain_type_kwargs={"prompt": prompt}
         )
+        logger.info("RAG 체인 생성 완료")
         
         return chain
         
     except Exception as e:
-        st.error(f"❌ RAG 체인 생성 실패: {e}")
+        error_msg = f"RAG 체인 생성 실패: {e}"
+        logger.error(error_msg, exc_info=True)
+        st.error(f"❌ {error_msg}")
         return None
 
 def process_question(question: str) -> str:
     """질문 처리"""
+    logger.info(f"질문 처리 시작: {question[:50]}...")
+    
     if not CHROMADB_AVAILABLE:
-        return "ChromaDB가 설치되지 않았습니다."
+        error_msg = "ChromaDB가 설치되지 않았습니다."
+        logger.error(error_msg)
+        return error_msg
     
     try:
         # RAG 체인 가져오기
+        logger.info("RAG 체인 가져오기 시작")
         chain = get_rag_chain()
         if chain is None:
-            return "벡터 데이터베이스를 로드할 수 없습니다."
+            error_msg = "벡터 데이터베이스를 로드할 수 없습니다."
+            logger.error(error_msg)
+            return error_msg
+        logger.info("RAG 체인 가져오기 완료")
         
         # 질문 처리
+        logger.info("질문 처리 실행 시작")
         response = chain.invoke({"query": question})
-        return response.get("result", "답변을 생성할 수 없습니다.")
+        result = response.get("result", "답변을 생성할 수 없습니다.")
+        logger.info(f"질문 처리 완료 - 답변 길이: {len(result)}")
+        return result
         
     except Exception as e:
-        return f"질문 처리 중 오류 발생: {e}"
+        error_msg = f"질문 처리 중 오류 발생: {e}"
+        logger.error(error_msg, exc_info=True)
+        return error_msg
 
 def main():
     """메인 함수"""

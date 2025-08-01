@@ -62,6 +62,7 @@ os.environ['PYTORCH_DISABLE_WARNINGS'] = '1'
 
 # ChromaDB 관련 import
 try:
+    import chromadb
     from langchain_community.vectorstores import Chroma
     CHROMADB_AVAILABLE = True
 except ImportError:
@@ -444,14 +445,36 @@ def save_to_chroma_store(documents: list) -> None:
                 import numpy as final_np
                 logger.info(f"Final NumPy check - version: {final_np.__version__}")
                 
-                # ChromaDB 저장 시도
-                vector_store = Chroma.from_documents(
-                    documents=documents,
-                    embedding=embeddings,
-                    persist_directory=get_chroma_db_path()
-                )
-                vector_store.persist()
-                logger.info("ChromaDB document save completed")
+                            # 새로운 ChromaDB 클라이언트 방식 사용
+            chroma_path = get_chroma_db_path()
+            client = chromadb.PersistentClient(path=chroma_path)
+            
+            # 컬렉션 생성 또는 가져오기
+            collection_name = "bizmob_documents"
+            try:
+                collection = client.get_collection(name=collection_name)
+                logger.info("Existing collection found")
+            except:
+                collection = client.create_collection(name=collection_name)
+                logger.info("New collection created")
+            
+            # 문서를 ChromaDB에 저장
+            documents_texts = [doc.page_content for doc in documents]
+            documents_metadatas = [doc.metadata for doc in documents]
+            documents_ids = [f"doc_{i}" for i in range(len(documents))]
+            
+            # 임베딩 생성
+            embeddings_list = embeddings.embed_documents(documents_texts)
+            
+            # ChromaDB에 추가
+            collection.add(
+                documents=documents_texts,
+                embeddings=embeddings_list,
+                metadatas=documents_metadatas,
+                ids=documents_ids
+            )
+            
+            logger.info("ChromaDB document save completed")
                 
             except RuntimeError as e:
                 if "Numpy is not available" in str(e):
@@ -521,16 +544,29 @@ def load_chroma_store():
         embeddings = get_embedding_model()
         logger.info("Embedding model loading completed")
         
-        logger.info("ChromaDB vector store creation started")
+        # 새로운 ChromaDB 클라이언트 방식 사용
+        client = chromadb.PersistentClient(path=chroma_path)
+        
+        # 컬렉션 가져오기
+        collection_name = "bizmob_documents"
+        try:
+            collection = client.get_collection(name=collection_name)
+            logger.info("Existing collection found")
+        except:
+            logger.warning("Collection not found, creating new one")
+            collection = client.create_collection(name=collection_name)
+        
+        # LangChain Chroma 벡터 스토어 생성
         vector_store = Chroma(
-            persist_directory=chroma_path,
+            client=client,
+            collection_name=collection_name,
             embedding_function=embeddings
         )
         logger.info("ChromaDB vector store creation completed")
         
         # 벡터 스토어 정보 로깅
         try:
-            collection_count = vector_store._collection.count()
+            collection_count = collection.count()
             logger.info(f"ChromaDB collection document count: {collection_count}")
         except Exception as e:
             logger.warning(f"Collection info check failed: {e}")

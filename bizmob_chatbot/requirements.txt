@@ -2,7 +2,7 @@ streamlit
 langchain
 langchain-community
 langchain-openai
-chromadb
+chromadb>=0.4.0,<0.5.0
 sentence-transformers
 huggingface-hub
 ollama
@@ -14,7 +14,7 @@ PyPDF2>=3.0.0
 pypdf>=3.0.0
 pdfplumber>=0.10.0
 unstructured
-numpy>=1.26.2
+numpy>=1.26.2,<2.0.0
 scikit-learn>=1.0.0
 torch>=2.0.0,<3.0.0
 sentence-transformers>=2.2.0

@@ -191,8 +191,63 @@ st.markdown("""
         padding: 1rem;
         margin: 1rem 0;
     }
+    .user-role {
+        background-color: #e3f2fd;
+        border: 1px solid #bbdefb;
+        border-radius: 5px;
+        padding: 0.5rem;
+        margin: 1rem 0;
+        text-align: center;
+        font-weight: bold;
+    }
+    .admin-only {
+        background-color: #fff3e0;
+        border: 1px solid #ffcc02;
+        border-radius: 5px;
+        padding: 1rem;
+        margin: 1rem 0;
+    }
 </style>
 """, unsafe_allow_html=True)
+
+def check_user_role():
+    """사용자 권한 확인"""
+    # 실제 환경에서는 데이터베이스나 인증 시스템을 사용해야 합니다
+    # 여기서는 간단한 예시로 관리자 권한을 확인합니다
+    if 'user_role' not in st.session_state:
+        # 기본값은 일반 사용자
+        st.session_state.user_role = 'user'
+    
+    return st.session_state.user_role
+
+def is_admin():
+    """관리자 권한 확인"""
+    return check_user_role() == 'admin'
+
+def show_role_selector():
+    """사용자 권한 선택기"""
+    st.sidebar.subheader("👤 사용자 권한")
+    
+    role_options = {
+        'user': '일반 사용자',
+        'admin': '관리자'
+    }
+    
+    current_role = st.session_state.get('user_role', 'user')
+    selected_role = st.selectbox(
+        "권한 선택",
+        options=list(role_options.keys()),
+        format_func=lambda x: role_options[x],
+        index=0 if current_role == 'user' else 1
+    )
+    
+    if selected_role != current_role:
+        st.session_state.user_role = selected_role
+        st.rerun()
+    
+    # 현재 권한 표시
+    role_display = "관리자" if selected_role == 'admin' else "일반 사용자"
+    st.sidebar.markdown(f'<div class="user-role">현재 권한: {role_display}</div>', unsafe_allow_html=True)
 
 def get_chroma_db_path():
     """ChromaDB 경로 반환"""
@@ -705,6 +760,9 @@ def main():
     with st.sidebar:
         st.header("⚙️ 설정")
         
+        # 사용자 권한 선택기
+        show_role_selector()
+
         # AI 모델 선택
         st.subheader("🤖 AI 모델 선택")
         
@@ -808,23 +866,37 @@ def main():
             st.session_state.selected_embedding_model = selected_embedding
             st.session_state.vector_db_initialized = False
         
-        # 벡터 DB 초기화 버튼
-        st.subheader("🗄️ 벡터 데이터베이스")
-        
-        if st.button("벡터 DB 초기화", type="primary"):
-            if initialize_vector_db():
-                st.session_state.vector_db_initialized = True
-        
-        # 벡터 DB 상태 표시
-        if st.session_state.get('vector_db_initialized', False):
-            st.success("✅ 벡터 DB 초기화됨")
+        # 벡터 DB 초기화 버튼 (관리자만)
+        if is_admin():
+            st.subheader("🗄️ 벡터 데이터베이스")
+            
+            if st.button("벡터 DB 초기화", type="primary"):
+                if initialize_vector_db():
+                    st.session_state.vector_db_initialized = True
+            
+            # 벡터 DB 상태 표시
+            if st.session_state.get('vector_db_initialized', False):
+                st.success("✅ 벡터 DB 초기화됨")
+            else:
+                st.warning("⚠️ 벡터 DB 초기화 필요")
         else:
-            st.warning("⚠️ 벡터 DB 초기화 필요")
+            # 일반 사용자에게는 간단한 상태만 표시
+            st.subheader("🗄️ 벡터 데이터베이스")
+            if st.session_state.get('vector_db_initialized', False):
+                st.success("✅ 벡터 DB 준비됨")
+            else:
+                st.warning("⚠️ 관리자가 벡터 DB를 초기화해야 합니다")
 
-    # 메인 탭
-    tab1, tab2, tab3, tab4 = st.tabs(["💬 챗봇", "📁 파일 업로드", "🗄️ 벡터 DB 관리", "ℹ️ 정보"])
+    # 사용자 권한에 따른 탭 구성
+    user_role = check_user_role()
     
-    with tab1:
+    if user_role == 'user':
+        # 일반 사용자: 챗봇 기능만 표시
+        st.markdown('<div class="admin-only">🔒 일반 사용자 모드: 챗봇 기능만 사용 가능합니다.</div>', unsafe_allow_html=True)
+        
+        # 챗봇 인터페이스
+        st.subheader("💬 질문하기")
+        
         # 현재 선택된 모델 정보 표시
         selected_model = st.session_state.get('selected_model', 'llama3.2')
         if selected_model:
@@ -842,9 +914,6 @@ def main():
             else:
                 st.warning("저장된 모델 정보가 없습니다.")
         
-        # 챗봇 인터페이스
-        st.subheader("💬 질문하기")
-        
         # 질문 입력
         question = st.text_area("질문을 입력하세요:", height=100)
         
@@ -857,206 +926,246 @@ def main():
             else:
                 st.warning("질문을 입력해주세요.")
     
-    with tab2:
-        st.subheader("📁 문서 업로드")
+    else:
+        # 관리자: 모든 기능 표시
+        st.markdown('<div class="admin-only">🔧 관리자 모드: 모든 기능을 사용할 수 있습니다.</div>', unsafe_allow_html=True)
         
-        # 지원되는 파일 형식 표시
-        supported_extensions = get_supported_extensions()
-        st.info(f"지원되는 파일 형식: {', '.join(supported_extensions)}")
+        # 메인 탭
+        tab1, tab2, tab3, tab4 = st.tabs(["💬 챗봇", "📁 파일 업로드", "🗄️ 벡터 DB 관리", "ℹ️ 정보"])
         
-        # 파일 업로드
-        uploaded_files = st.file_uploader(
-            "문서를 업로드하세요",
-            type=supported_extensions,
-            accept_multiple_files=True
-        )
-        
-        if uploaded_files:
-            st.write(f"업로드된 파일: {len(uploaded_files)}개")
-            
-            if st.button("문서 처리 및 벡터 DB 저장", type="primary"):
-                with st.spinner("문서를 처리하는 중..."):
-                    all_documents = []
-                    
-                    for uploaded_file in uploaded_files:
-                        try:
-                            # 파일 처리
-                            documents = process_file(uploaded_file)
-                            all_documents.extend(documents)
-                            st.success(f"✅ {uploaded_file.name} 처리 완료")
-                        except Exception as e:
-                            st.error(f"❌ {uploaded_file.name} 처리 실패: {e}")
-                    
-                    if all_documents:
-                        # ChromaDB에 저장
-                        save_to_chroma_store(all_documents)
-                        st.session_state.vector_db_initialized = True
-                    else:
-                        st.warning("처리할 문서가 없습니다.")
-    
-    with tab3:
-        st.subheader("🗄️ 벡터 DB 관리")
-        
-        # ChromaDB 상태 확인
-        chroma_path = get_chroma_db_path()
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("📊 벡터 DB 정보")
-            
-            if os.path.exists(chroma_path):
-                try:
-                    # ChromaDB 파일 정보
-                    chroma_files = os.listdir(chroma_path)
-                    total_size = sum(os.path.getsize(os.path.join(chroma_path, f)) for f in chroma_files if os.path.isfile(os.path.join(chroma_path, f)))
-                    
-                    st.success("✅ ChromaDB 존재")
-                    st.info(f"📁 파일 수: {len(chroma_files)}개")
-                    st.info(f"💾 크기: {total_size / 1024:.2f} KB")
-                    
-                    # 파일 목록 표시
-                    with st.expander("📋 파일 목록 보기"):
-                        for file in chroma_files:
-                            file_path = os.path.join(chroma_path, file)
-                            file_size = os.path.getsize(file_path) / 1024
-                            st.write(f"• {file} ({file_size:.2f} KB)")
-                    
-                    # 벡터 DB 내용 검색
-                    st.subheader("🔍 벡터 DB 내용 검색")
-                    search_query = st.text_input("검색어를 입력하세요:")
-                    
-                    if search_query and st.button("검색", type="primary"):
-                        try:
-                            from vector_db_utils import search_chroma_documents
-                            results = search_chroma_documents(search_query, st.session_state.get('selected_embedding_model', 'sentence-transformers/all-mpnet-base-v2'))
-                            
-                            if results:
-                                st.success(f"검색 결과: {len(results)}개")
-                                for i, (doc, score) in enumerate(results):
-                                    with st.expander(f"결과 {i+1} (유사도: {1/(1+score):.3f})"):
-                                        st.write(f"**내용:** {doc.page_content[:200]}...")
-                                        st.write(f"**메타데이터:** {doc.metadata}")
-                            else:
-                                st.warning("검색 결과가 없습니다.")
-                        except Exception as e:
-                            st.error(f"검색 중 오류: {e}")
-                    
-                except Exception as e:
-                    st.error(f"ChromaDB 정보 확인 실패: {e}")
-            else:
-                st.warning("⚠️ ChromaDB가 존재하지 않습니다.")
-        
-        with col2:
-            st.subheader("💾 벡터 DB 다운로드")
-            
-            if os.path.exists(chroma_path):
-                try:
-                    # ChromaDB 압축 다운로드
-                    import zipfile
-                    import tempfile
-                    
-                    if st.button("📦 ChromaDB 전체 다운로드", type="primary"):
-                        with tempfile.NamedTemporaryFile(delete=False, suffix='.zip') as tmp_file:
-                            with zipfile.ZipFile(tmp_file.name, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                                for root, dirs, files in os.walk(chroma_path):
-                                    for file in files:
-                                        file_path = os.path.join(root, file)
-                                        arcname = os.path.relpath(file_path, chroma_path)
-                                        zipf.write(file_path, arcname)
-                            
-                            # 다운로드 버튼 생성
-                            with open(tmp_file.name, 'rb') as f:
-                                st.download_button(
-                                    label="⬇️ 다운로드",
-                                    data=f.read(),
-                                    file_name=f"chroma_db_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
-                                    mime="application/zip"
-                                )
-                            
-                            # 임시 파일 삭제
-                            os.unlink(tmp_file.name)
-                    
-                    # 모델 정보 파일 다운로드
-                    model_info_path = get_model_info_path()
-                    if os.path.exists(model_info_path):
+        with tab1:
+            # 현재 선택된 모델 정보 표시
+            selected_model = st.session_state.get('selected_model', 'llama3.2')
+            if selected_model:
+                # 저장된 모델 정보가 있는지 확인
+                model_info_path = get_model_info_path()
+                if os.path.exists(model_info_path):
+                    try:
                         with open(model_info_path, 'r', encoding='utf-8') as f:
-                            model_info_data = f.read()
+                            model_info = json.load(f)
+                            st.info(f"📊 현재 모델: {model_info.get('ai_model', 'Unknown')}")
+                            st.info(f"🔍 임베딩 모델: {model_info.get('embedding_model', 'Unknown')}")
+                            st.info(f"⏰ 생성 시간: {model_info.get('timestamp', 'Unknown')}")
+                    except:
+                        st.warning("모델 정보를 불러올 수 없습니다.")
+                else:
+                    st.warning("저장된 모델 정보가 없습니다.")
+            
+            # 챗봇 인터페이스
+            st.subheader("💬 질문하기")
+            
+            # 질문 입력
+            question = st.text_area("질문을 입력하세요:", height=100)
+            
+            if st.button("질문하기", type="primary"):
+                if question.strip():
+                    with st.spinner("답변을 생성하는 중..."):
+                        answer = process_question(question)
+                        st.markdown("### 답변:")
+                        st.write(answer)
+                else:
+                    st.warning("질문을 입력해주세요.")
+        
+        with tab2:
+            st.subheader("📁 문서 업로드")
+            
+            # 지원되는 파일 형식 표시
+            supported_extensions = get_supported_extensions()
+            st.info(f"지원되는 파일 형식: {', '.join(supported_extensions)}")
+            
+            # 파일 업로드
+            uploaded_files = st.file_uploader(
+                "문서를 업로드하세요",
+                type=supported_extensions,
+                accept_multiple_files=True
+            )
+            
+            if uploaded_files:
+                st.write(f"업로드된 파일: {len(uploaded_files)}개")
+                
+                if st.button("문서 처리 및 벡터 DB 저장", type="primary"):
+                    with st.spinner("문서를 처리하는 중..."):
+                        all_documents = []
                         
-                        st.download_button(
-                            label="📄 모델 정보 다운로드",
-                            data=model_info_data,
-                            file_name=f"model_info_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                            mime="application/json"
-                        )
-                    
-                    # 벡터 DB 초기화
-                    st.subheader("🗑️ 벡터 DB 초기화")
-                    if st.button("⚠️ 벡터 DB 완전 삭제", type="secondary"):
-                        try:
-                            import shutil
-                            shutil.rmtree(chroma_path)
-                            st.success("✅ 벡터 DB가 삭제되었습니다.")
-                            st.session_state.vector_db_initialized = False
-                        except Exception as e:
-                            st.error(f"삭제 실패: {e}")
-                    
-                except Exception as e:
-                    st.error(f"다운로드 기능 오류: {e}")
-            else:
-                st.warning("다운로드할 ChromaDB가 없습니다.")
-    
-    with tab4:
-        st.subheader("ℹ️ 시스템 정보")
+                        for uploaded_file in uploaded_files:
+                            try:
+                                # 파일 처리
+                                documents = process_file(uploaded_file)
+                                all_documents.extend(documents)
+                                st.success(f"✅ {uploaded_file.name} 처리 완료")
+                            except Exception as e:
+                                st.error(f"❌ {uploaded_file.name} 처리 실패: {e}")
+                        
+                        if all_documents:
+                            # ChromaDB에 저장
+                            save_to_chroma_store(all_documents)
+                            st.session_state.vector_db_initialized = True
+                        else:
+                            st.warning("처리할 문서가 없습니다.")
         
-        # 시스템 정보 표시
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("🔧 환경 정보")
-            st.info(f"Python 버전: {sys.version}")
-            st.info(f"Streamlit 버전: {st.__version__}")
+        with tab3:
+            st.subheader("🗄️ 벡터 DB 관리")
             
             # ChromaDB 상태 확인
             chroma_path = get_chroma_db_path()
-            if os.path.exists(chroma_path):
-                st.success("✅ ChromaDB 디렉토리 존재")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.subheader("📊 벡터 DB 정보")
                 
-                # ChromaDB 파일 목록
-                try:
-                    chroma_files = os.listdir(chroma_path)
-                    if chroma_files:
-                        st.write("ChromaDB 파일:")
-                        for file in chroma_files:
-                            st.write(f"- {file}")
-                    else:
-                        st.warning("ChromaDB가 비어있습니다.")
-                except Exception as e:
-                    st.error(f"ChromaDB 파일 목록 확인 실패: {e}")
-            else:
-                st.warning("⚠️ ChromaDB 디렉토리가 없습니다.")
+                if os.path.exists(chroma_path):
+                    try:
+                        # ChromaDB 파일 정보
+                        chroma_files = os.listdir(chroma_path)
+                        total_size = sum(os.path.getsize(os.path.join(chroma_path, f)) for f in chroma_files if os.path.isfile(os.path.join(chroma_path, f)))
+                        
+                        st.success("✅ ChromaDB 존재")
+                        st.info(f"📁 파일 수: {len(chroma_files)}개")
+                        st.info(f"💾 크기: {total_size / 1024:.2f} KB")
+                        
+                        # 파일 목록 표시
+                        with st.expander("📋 파일 목록 보기"):
+                            for file in chroma_files:
+                                file_path = os.path.join(chroma_path, file)
+                                file_size = os.path.getsize(file_path) / 1024
+                                st.write(f"• {file} ({file_size:.2f} KB)")
+                        
+                        # 벡터 DB 내용 검색
+                        st.subheader("🔍 벡터 DB 내용 검색")
+                        search_query = st.text_input("검색어를 입력하세요:")
+                        
+                        if search_query and st.button("검색", type="primary"):
+                            try:
+                                from vector_db_utils import search_chroma_documents
+                                results = search_chroma_documents(search_query, st.session_state.get('selected_embedding_model', 'sentence-transformers/all-mpnet-base-v2'))
+                                
+                                if results:
+                                    st.success(f"검색 결과: {len(results)}개")
+                                    for i, (doc, score) in enumerate(results):
+                                        with st.expander(f"결과 {i+1} (유사도: {1/(1+score):.3f})"):
+                                            st.write(f"**내용:** {doc.page_content[:200]}...")
+                                            st.write(f"**메타데이터:** {doc.metadata}")
+                                else:
+                                    st.warning("검색 결과가 없습니다.")
+                            except Exception as e:
+                                st.error(f"검색 중 오류: {e}")
+                        
+                    except Exception as e:
+                        st.error(f"ChromaDB 정보 확인 실패: {e}")
+                else:
+                    st.warning("⚠️ ChromaDB가 존재하지 않습니다.")
+            
+            with col2:
+                st.subheader("💾 벡터 DB 다운로드")
+                
+                if os.path.exists(chroma_path):
+                    try:
+                        # ChromaDB 압축 다운로드
+                        import zipfile
+                        import tempfile
+                        
+                        if st.button("📦 ChromaDB 전체 다운로드", type="primary"):
+                            with tempfile.NamedTemporaryFile(delete=False, suffix='.zip') as tmp_file:
+                                with zipfile.ZipFile(tmp_file.name, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                                    for root, dirs, files in os.walk(chroma_path):
+                                        for file in files:
+                                            file_path = os.path.join(root, file)
+                                            arcname = os.path.relpath(file_path, chroma_path)
+                                            zipf.write(file_path, arcname)
+                                
+                                # 다운로드 버튼 생성
+                                with open(tmp_file.name, 'rb') as f:
+                                    st.download_button(
+                                        label="⬇️ 다운로드",
+                                        data=f.read(),
+                                        file_name=f"chroma_db_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+                                        mime="application/zip"
+                                    )
+                                
+                                # 임시 파일 삭제
+                                os.unlink(tmp_file.name)
+                        
+                        # 모델 정보 파일 다운로드
+                        model_info_path = get_model_info_path()
+                        if os.path.exists(model_info_path):
+                            with open(model_info_path, 'r', encoding='utf-8') as f:
+                                model_info_data = f.read()
+                            
+                            st.download_button(
+                                label="📄 모델 정보 다운로드",
+                                data=model_info_data,
+                                file_name=f"model_info_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                                mime="application/json"
+                            )
+                        
+                        # 벡터 DB 초기화
+                        st.subheader("🗑️ 벡터 DB 초기화")
+                        if st.button("⚠️ 벡터 DB 완전 삭제", type="secondary"):
+                            try:
+                                import shutil
+                                shutil.rmtree(chroma_path)
+                                st.success("✅ 벡터 DB가 삭제되었습니다.")
+                                st.session_state.vector_db_initialized = False
+                            except Exception as e:
+                                st.error(f"삭제 실패: {e}")
+                        
+                    except Exception as e:
+                        st.error(f"다운로드 기능 오류: {e}")
+                else:
+                    st.warning("다운로드할 ChromaDB가 없습니다.")
         
-        with col2:
-            st.subheader("📋 모델 정보")
+        with tab4:
+            st.subheader("ℹ️ 시스템 정보")
             
-            # 모델 정보 파일 확인
-            model_info_path = get_model_info_path()
-            if os.path.exists(model_info_path):
-                st.success("✅ 모델 정보 파일 존재")
-                try:
-                    with open(model_info_path, 'r', encoding='utf-8') as f:
-                        model_info = json.load(f)
-                        st.json(model_info)
-                except Exception as e:
-                    st.error(f"모델 정보 파일 읽기 실패: {e}")
-            else:
-                st.warning("⚠️ 모델 정보 파일이 없습니다.")
+            # 시스템 정보 표시
+            col1, col2 = st.columns(2)
             
-            # 현재 세션 상태 정보
-            st.subheader("🎛️ 현재 설정")
-            st.info(f"선택된 AI 모델: {st.session_state.get('selected_model', 'llama3.2')}")
-            st.info(f"선택된 임베딩 모델: {st.session_state.get('selected_embedding_model', 'sentence-transformers/all-mpnet-base-v2')}")
-            st.info(f"벡터 DB 초기화: {'✅ 완료' if st.session_state.get('vector_db_initialized', False) else '⚠️ 필요'}")
+            with col1:
+                st.subheader("🔧 환경 정보")
+                st.info(f"Python 버전: {sys.version}")
+                st.info(f"Streamlit 버전: {st.__version__}")
+                
+                # ChromaDB 상태 확인
+                chroma_path = get_chroma_db_path()
+                if os.path.exists(chroma_path):
+                    st.success("✅ ChromaDB 디렉토리 존재")
+                    
+                    # ChromaDB 파일 목록
+                    try:
+                        chroma_files = os.listdir(chroma_path)
+                        if chroma_files:
+                            st.write("ChromaDB 파일:")
+                            for file in chroma_files:
+                                st.write(f"- {file}")
+                        else:
+                            st.warning("ChromaDB가 비어있습니다.")
+                    except Exception as e:
+                        st.error(f"ChromaDB 파일 목록 확인 실패: {e}")
+                else:
+                    st.warning("⚠️ ChromaDB 디렉토리가 없습니다.")
+            
+            with col2:
+                st.subheader("📋 모델 정보")
+                
+                # 모델 정보 파일 확인
+                model_info_path = get_model_info_path()
+                if os.path.exists(model_info_path):
+                    st.success("✅ 모델 정보 파일 존재")
+                    try:
+                        with open(model_info_path, 'r', encoding='utf-8') as f:
+                            model_info = json.load(f)
+                            st.json(model_info)
+                    except Exception as e:
+                        st.error(f"모델 정보 파일 읽기 실패: {e}")
+                else:
+                    st.warning("⚠️ 모델 정보 파일이 없습니다.")
+                
+                # 현재 세션 상태 정보
+                st.subheader("🎛️ 현재 설정")
+                st.info(f"선택된 AI 모델: {st.session_state.get('selected_model', 'llama3.2')}")
+                st.info(f"선택된 임베딩 모델: {st.session_state.get('selected_embedding_model', 'sentence-transformers/all-mpnet-base-v2')}")
+                st.info(f"벡터 DB 초기화: {'✅ 완료' if st.session_state.get('vector_db_initialized', False) else '⚠️ 필요'}")
 
 if __name__ == "__main__":
     main() 

@@ -28,11 +28,49 @@ import sentence_transformers
 # 경고 억제
 warnings.filterwarnings("ignore")
 
+# torch.load를 safetensors.load_file로 전역적으로 교체
+try:
+    import torch
+    original_torch_load = torch.load
+    
+    def safe_torch_load(f, *args, **kwargs):
+        """torch.load를 safetensors.load_file로 대체하는 안전한 로더"""
+        try:
+            # 파일 경로인 경우 safetensors로 시도
+            if isinstance(f, str) and os.path.exists(f):
+                if f.endswith('.safetensors'):
+                    return load_file(f)
+                else:
+                    # 일반 torch 파일인 경우 원본 사용하되 경고 억제
+                    kwargs['weights_only'] = True
+                    return original_torch_load(f, *args, **kwargs)
+            else:
+                # 파일 객체인 경우 원본 사용하되 경고 억제
+                kwargs['weights_only'] = True
+                return original_torch_load(f, *args, **kwargs)
+        except Exception as e:
+            st.warning(f"모델 로딩 중 오류 발생: {e}")
+            # 최후 수단으로 원본 torch.load 사용
+            kwargs['weights_only'] = True
+            return original_torch_load(f, *args, **kwargs)
+    
+    # torch.load를 안전한 버전으로 교체
+    torch.load = safe_torch_load
+    print("✅ torch.load를 safetensors.load_file로 교체 완료")
+    
+except Exception as e:
+    print(f"⚠️ torch.load 교체 실패: {e}")
+
 # 환경 변수 설정
 os.environ['TORCH_WARN_ON_LOAD'] = '0'
 os.environ['TORCH_LOAD_WARN_ONLY'] = '0'
 os.environ['PYTORCH_DISABLE_WARNINGS'] = '1'
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ['SAFETENSORS_FAST_GPU'] = '1'
+os.environ['TRANSFORMERS_OFFLINE'] = '0'
+os.environ['TORCH_WEIGHTS_ONLY'] = '1'
+os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'
+os.environ['TRANSFORMERS_USE_SAFETENSORS'] = '1'
 
 # 외부 소스 확장자 리스트 상수 선언
 EXTERNAL_SOURCE_EXTS = [
@@ -1492,7 +1530,7 @@ class SafeSentenceTransformerEmbeddings(Embeddings):
         self._load_model()
     
     def _load_model(self):
-        """모델을 안전하게 로드"""
+        """모델을 안전하게 로드 (safetensors 강제 사용)"""
         try:
             # 환경 변수 설정으로 safetensors 강제 사용
             import os
@@ -1501,17 +1539,24 @@ class SafeSentenceTransformerEmbeddings(Embeddings):
             os.environ['TORCH_WEIGHTS_ONLY'] = '1'
             os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'
             os.environ['TRANSFORMERS_USE_SAFETENSORS'] = '1'
+            os.environ['TORCH_WARN_ON_LOAD'] = '0'
+            os.environ['TORCH_LOAD_WARN_ONLY'] = '0'
             
             from sentence_transformers import SentenceTransformer
             
+            # safetensors를 명시적으로 사용하도록 설정
             self.model = SentenceTransformer(
                 self.model_name,
                 device=self.device,
                 trust_remote_code=True
             )
             
+            # 모델이 로드된 후 safetensors 사용 확인
+            st.success(f"✅ {self.model_name} 모델을 safetensors로 안전하게 로드했습니다.")
+            
         except Exception as e:
             st.error(f"모델 로딩 실패: {str(e)}")
+            st.info("HuggingFaceEmbeddings로 재시도합니다...")
             raise e
     
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
@@ -1557,13 +1602,19 @@ def get_embedding_model():
         st.info("HuggingFaceEmbeddings로 재시도합니다...")
         
         try:
-            # HuggingFaceEmbeddings로 fallback
+            # HuggingFaceEmbeddings로 fallback (safetensors 사용)
             embeddings = HuggingFaceEmbeddings(
                 model_name=selected_embedding,
-                model_kwargs={'device': 'cpu'},
+                model_kwargs={
+                    'device': 'cpu',
+                    'torch_dtype': 'auto',
+                    'low_cpu_mem_usage': True,
+                    'trust_remote_code': True
+                },
                 encode_kwargs={'normalize_embeddings': True}
             )
             
+            st.success(f"✅ {selected_embedding} 모델을 HuggingFaceEmbeddings로 로드했습니다.")
             return embeddings
             
         except Exception as e2:

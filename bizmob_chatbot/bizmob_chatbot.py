@@ -22,6 +22,8 @@ from typing import List, Dict, Any, Optional
 import fitz  # PyMuPDF
 from pptx import Presentation
 from docx import Document as DocxDocument
+from safetensors.torch import load_file
+from transformers import AutoTokenizer, AutoModel
 
 # 경고 억제
 warnings.filterwarnings("ignore")
@@ -1480,46 +1482,92 @@ def get_available_embedding_models():
     }
 
 def get_embedding_model():
-    """선택된 임베딩 모델을 반환"""
+    """선택된 임베딩 모델을 반환 (safetensors 지원)"""
     selected_embedding = st.session_state.get('selected_embedding_model', 'jhgan/ko-sroberta-multitask')
-    # 모델별 설정
+    
+    # safetensors를 사용하여 모델 로딩을 강제하는 설정
     model_configs = {
         'jhgan/ko-sroberta-multitask': {
-            'model_kwargs': {'device': 'cpu'},
+            'model_kwargs': {'device': 'cpu', 'use_safetensors': True},
             'encode_kwargs': {'normalize_embeddings': True}
         },
         'sentence-transformers/all-MiniLM-L6-v2': {
-            'model_kwargs': {'device': 'cpu'},
+            'model_kwargs': {'device': 'cpu', 'use_safetensors': True},
             'encode_kwargs': {'normalize_embeddings': True}
         },
         'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2': {
-            'model_kwargs': {'device': 'cpu'},
+            'model_kwargs': {'device': 'cpu', 'use_safetensors': True},
             'encode_kwargs': {'normalize_embeddings': True}
         },
         'sentence-transformers/all-mpnet-base-v2': {
-            'model_kwargs': {'device': 'cpu'},
+            'model_kwargs': {'device': 'cpu', 'use_safetensors': True},
             'encode_kwargs': {'normalize_embeddings': True}
         },
         'intfloat/multilingual-e5-large': {
-            'model_kwargs': {'device': 'cpu'},
+            'model_kwargs': {'device': 'cpu', 'use_safetensors': True},
             'encode_kwargs': {'normalize_embeddings': True}
         }
     }
+    
     config = model_configs.get(selected_embedding, {})
-    embeddings = HuggingFaceEmbeddings(
-        model_name=selected_embedding,
-        **config
-    )
-    # meta tensor 문제 임시 패치
-    import torch
-    if hasattr(embeddings, 'client') and hasattr(embeddings.client, 'model'):
-        model = embeddings.client.model
-        if hasattr(model, 'device') and str(model.device) == 'meta':
-            try:
-                model.to_empty('cpu')
-            except Exception as e:
-                pass  # 실패해도 무시
-    return embeddings
+    
+    try:
+        # safetensors 사용을 강제하는 환경 변수 설정
+        import os
+        os.environ['SAFETENSORS_FAST_GPU'] = '1'
+        
+        embeddings = HuggingFaceEmbeddings(
+            model_name=selected_embedding,
+            **config
+        )
+        
+        # meta tensor 문제 임시 패치
+        import torch
+        if hasattr(embeddings, 'client') and hasattr(embeddings.client, 'model'):
+            model = embeddings.client.model
+            if hasattr(model, 'device') and str(model.device) == 'meta':
+                try:
+                    model.to_empty('cpu')
+                except Exception as e:
+                    pass  # 실패해도 무시
+        
+        return embeddings
+        
+    except Exception as e:
+        st.error(f"임베딩 모델 로딩 실패: {str(e)}")
+        st.info("safetensors를 사용하여 모델을 로딩하려고 시도합니다...")
+        
+        # fallback: 직접 safetensors 사용
+        try:
+            from transformers import AutoTokenizer, AutoModel
+            import torch
+            
+            # 모델과 토크나이저 로딩
+            tokenizer = AutoTokenizer.from_pretrained(selected_embedding, use_safetensors=True)
+            model = AutoModel.from_pretrained(selected_embedding, use_safetensors=True)
+            
+            # CPU로 이동
+            model = model.to('cpu')
+            
+            # HuggingFaceEmbeddings 객체 생성
+            from langchain_community.embeddings import HuggingFaceEmbeddings
+            
+            embeddings = HuggingFaceEmbeddings(
+                model_name=selected_embedding,
+                model_kwargs={'device': 'cpu', 'use_safetensors': True},
+                encode_kwargs={'normalize_embeddings': True}
+            )
+            
+            return embeddings
+            
+        except Exception as fallback_error:
+            st.error(f"safetensors fallback도 실패: {str(fallback_error)}")
+            # 최종 fallback: 기본 설정으로 시도
+            return HuggingFaceEmbeddings(
+                model_name=selected_embedding,
+                model_kwargs={'device': 'cpu'},
+                encode_kwargs={'normalize_embeddings': True}
+            )
 
 def get_recommended_embedding_model(ai_model_name: str) -> str:
     """AI 모델에 따른 권장 임베딩 모델을 반환"""

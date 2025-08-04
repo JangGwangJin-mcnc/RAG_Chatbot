@@ -1,267 +1,37 @@
-#!/usr/bin/env python3
-"""
-bizMOB 챗봇 - ChromaDB 전용 버전
-bizmob_chatbot_original.py의 모든 기능을 ChromaDB를 사용하여 구현
-"""
-
+## streamlit 관련 모듈 불러오기
 import streamlit as st
 from streamlit.runtime.uploaded_file_manager import UploadedFile
+
+from langchain_core.documents.base import Document
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import FAISS
+from langchain.prompts import PromptTemplate
+from langchain_core.runnables import Runnable, RunnablePassthrough
+from langchain.schema.output_parser import StrOutputParser
+from langchain_community.document_loaders import PyMuPDFLoader, UnstructuredExcelLoader, UnstructuredPowerPointLoader, UnstructuredWordDocumentLoader
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_ollama import OllamaLLM
+from typing import List
 import os
-import sys
-import json
-import pandas as pd
-import re
-import logging
-import glob
-import shutil
-import subprocess
-import time
-import warnings
-from datetime import datetime
-from typing import List, Dict, Any, Optional
 import fitz  # PyMuPDF
+import re
+import glob
+import pandas as pd
 from pptx import Presentation
 from docx import Document as DocxDocument
+import shutil
+import subprocess
 
-# 경고 억제
-warnings.filterwarnings("ignore")
+## 환경변수 불러오기
+from dotenv import load_dotenv, dotenv_values
+load_dotenv()
 
-# 환경 변수 설정
-os.environ['TORCH_WARN_ON_LOAD'] = '0'
-os.environ['TORCH_LOAD_WARN_ONLY'] = '0'
-os.environ['PYTORCH_DISABLE_WARNINGS'] = '1'
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # 외부 소스 확장자 리스트 상수 선언
 EXTERNAL_SOURCE_EXTS = [
     ".py", ".js", ".scss", ".ts", ".vue", ".md", ".txt", ".rst", ".json", ".yaml", ".yml"
 ]
-
-# 로깅 설정
-def setup_logging():
-    """로깅 설정"""
-    log_dir = "./logs"
-    os.makedirs(log_dir, exist_ok=True)
-    
-    log_file = os.path.join(log_dir, f"bizmob_chatbot_{datetime.now().strftime('%Y%m%d')}.log")
-    
-    # 기존 핸들러 제거
-    for handler in logging.root.handlers[:]:
-        logging.root.removeHandler(handler)
-    
-    # 로거 설정
-    logger = logging.getLogger(__name__)
-    logger.setLevel(logging.INFO)
-    
-    # 파일 핸들러 (UTF-8 인코딩)
-    file_handler = logging.FileHandler(log_file, encoding='utf-8', mode='a')
-    file_handler.setLevel(logging.INFO)
-    file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    file_handler.setFormatter(file_formatter)
-    
-    # 콘솔 핸들러
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-    console_handler.setFormatter(console_formatter)
-    
-    # 핸들러 추가
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
-    
-    return logger
-
-# 로거 초기화
-logger = setup_logging()
-
-# ChromaDB 관련 import
-try:
-    import chromadb
-    from langchain_community.vectorstores import Chroma
-    CHROMADB_AVAILABLE = True
-except ImportError:
-    st.error("ChromaDB가 설치되지 않았습니다. pip install chromadb를 실행해주세요.")
-    CHROMADB_AVAILABLE = False
-
-# NumPy 강제 설치 확인 및 재설치
-try:
-    import numpy
-    logger.info(f"NumPy version: {numpy.__version__}")
-    
-    # NumPy가 제대로 작동하는지 테스트
-    test_array = numpy.array([1, 2, 3])
-    logger.info("NumPy test successful")
-    
-    # NumPy를 전역으로 설정하여 다른 모듈에서 사용할 수 있도록 함
-    import sys
-    sys.modules['numpy'] = numpy
-    
-    # 환경 변수 설정으로 NumPy 호환성 강화
-    import os
-    os.environ['TOKENIZERS_PARALLELISM'] = 'false'
-    os.environ['PYTORCH_DISABLE_WARNINGS'] = '1'
-    os.environ['TRANSFORMERS_OFFLINE'] = '0'
-    
-    # PyTorch와 NumPy 호환성 강제 설정
-    try:
-        import torch
-        if hasattr(torch, 'set_default_tensor_type'):
-            torch.set_default_tensor_type('torch.FloatTensor')
-        logger.info("PyTorch NumPy compatibility set")
-    except Exception as e:
-        logger.warning(f"PyTorch NumPy compatibility setup failed: {e}")
-    
-    # Transformers 라이브러리에서 NumPy 설정
-    try:
-        import transformers
-        if hasattr(transformers, 'np'):
-            transformers.np = numpy
-        logger.info("Transformers NumPy compatibility set")
-    except Exception as e:
-        logger.warning(f"Transformers NumPy compatibility setup failed: {e}")
-    
-    # SentenceTransformers에서 NumPy 설정
-    try:
-        import sentence_transformers
-        if hasattr(sentence_transformers, 'np'):
-            sentence_transformers.np = numpy
-        logger.info("SentenceTransformers NumPy compatibility set")
-    except Exception as e:
-        logger.warning(f"SentenceTransformers NumPy compatibility setup failed: {e}")
-    
-except ImportError:
-    logger.error("NumPy is not installed")
-    st.error("NumPy가 설치되지 않았습니다. pip install numpy>=1.26.2를 실행해주세요.")
-    st.stop()
-except Exception as e:
-    logger.error(f"NumPy error: {e}")
-    st.error(f"NumPy 오류가 발생했습니다. pip install numpy>=1.26.2를 실행해주세요.")
-    st.stop()
-
-# 기타 필요한 import들
-try:
-    from langchain_core.documents.base import Document
-    from langchain.text_splitter import RecursiveCharacterTextSplitter
-    from langchain.prompts import PromptTemplate
-    from langchain_core.runnables import Runnable, RunnablePassthrough
-    from langchain.schema.output_parser import StrOutputParser
-    from langchain_community.document_loaders import PyMuPDFLoader, UnstructuredExcelLoader, UnstructuredPowerPointLoader, UnstructuredWordDocumentLoader
-    from langchain_huggingface import HuggingFaceEmbeddings
-    from langchain_ollama import OllamaLLM
-    from langchain_community.llms import Ollama
-    from langchain.chains import RetrievalQA
-    from langchain.retrievers import ParentDocumentRetriever
-    from langchain.storage import InMemoryStore
-except ImportError as e:
-    st.error(f"필요한 라이브러리가 설치되지 않았습니다: {e}")
-    st.stop()
-
-# 환경변수 불러오기
-from dotenv import load_dotenv, dotenv_values
-load_dotenv()
-
-# 페이지 설정
-st.set_page_config(
-    page_title="bizMOB Platform 챗봇",
-    page_icon="📱",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# CSS 스타일
-st.markdown("""
-<style>
-    .main-header {
-        font-size: 2.5rem;
-        font-weight: bold;
-        color: #1f77b4;
-        text-align: center;
-        margin-bottom: 2rem;
-    }
-    .sub-header {
-        font-size: 1.2rem;
-        color: #666;
-        text-align: center;
-        margin-bottom: 1rem;
-    }
-    .success-box {
-        background-color: #d4edda;
-        border: 1px solid #c3e6cb;
-        border-radius: 5px;
-        padding: 1rem;
-        margin: 1rem 0;
-    }
-    .error-box {
-        background-color: #f8d7da;
-        border: 1px solid #f5c6cb;
-        border-radius: 5px;
-        padding: 1rem;
-        margin: 1rem 0;
-    }
-    .info-box {
-        background-color: #d1ecf1;
-        border: 1px solid #bee5eb;
-        border-radius: 5px;
-        padding: 1rem;
-        margin: 1rem 0;
-    }
-    .user-role {
-        background-color: #e3f2fd;
-        border: 1px solid #bbdefb;
-        border-radius: 5px;
-        padding: 0.5rem;
-        margin: 1rem 0;
-        text-align: center;
-        font-weight: bold;
-    }
-    .admin-only {
-        background-color: #fff3e0;
-        border: 1px solid #ffcc02;
-        border-radius: 5px;
-        padding: 1rem;
-        margin: 1rem 0;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-def check_user_role():
-    """사용자 권한 확인"""
-    # 실제 환경에서는 데이터베이스나 인증 시스템을 사용해야 합니다
-    # 여기서는 간단한 예시로 관리자 권한을 확인합니다
-    if 'user_role' not in st.session_state:
-        # 기본값은 일반 사용자
-        st.session_state.user_role = 'user'
-    
-    return st.session_state.user_role
-
-def is_admin():
-    """관리자 권한 확인"""
-    return check_user_role() == 'admin'
-
-def show_role_selector():
-    """사용자 권한 선택기"""
-    st.sidebar.subheader("👤 사용자 권한")
-    
-    role_options = {
-        'user': '일반 사용자',
-        'admin': '관리자'
-    }
-    
-    current_role = st.session_state.get('user_role', 'user')
-    selected_role = st.selectbox(
-        "권한 선택",
-        options=list(role_options.keys()),
-        format_func=lambda x: role_options[x],
-        index=0 if current_role == 'user' else 1
-    )
-    
-    if selected_role != current_role:
-        st.session_state.user_role = selected_role
-        st.rerun()
-    
-    # 현재 권한 표시
-    role_display = "관리자" if selected_role == 'admin' else "일반 사용자"
-    st.sidebar.markdown(f'<div class="user-role">현재 권한: {role_display}</div>', unsafe_allow_html=True)
 
 ############################### 1단계 : 파일 업로드 및 관리 함수들 ##########################
 
@@ -351,7 +121,7 @@ def upload_and_process_files() -> bool:
             
             # 벡터 데이터베이스 재초기화 옵션
             if st.button("🔄 업로드된 파일로 벡터 데이터베이스 재초기화", type="primary"):
-                if initialize_vector_db_with_documents():
+                if initialize_vector_db():
                     st.session_state.vector_db_initialized = True
                     st.success("벡터 데이터베이스가 새로운 파일들로 성공적으로 재초기화되었습니다!")
                     st.rerun()
@@ -522,7 +292,7 @@ def manage_uploaded_files() -> None:
                 col1, col2 = st.columns([1, 1])
                 with col1:
                     if st.button("🔄 벡터DB 재초기화", type="primary", key="file_manager_reinit"):
-                        if initialize_vector_db_with_documents():
+                        if initialize_vector_db():
                             st.session_state.vector_db_initialized = True
                             st.success("벡터 데이터베이스가 성공적으로 재초기화되었습니다!")
                         else:
@@ -566,7 +336,7 @@ def manage_uploaded_files() -> None:
     
     # 벡터DB 재초기화 버튼
     if st.button("🔄 벡터 데이터베이스 재초기화", type="primary", key="file_manager_main_reinit"):
-        if initialize_vector_db_with_documents():
+        if initialize_vector_db():
             st.session_state.vector_db_initialized = True
             st.success("벡터 데이터베이스가 성공적으로 재초기화되었습니다!")
         else:
@@ -632,7 +402,7 @@ def manage_uploaded_files() -> None:
                                             # 벡터DB 재초기화 제안
                                             st.warning("⚠️ 삭제된 파일이 벡터 데이터베이스에 반영되려면 재초기화가 필요합니다.")
                                             if st.button("🔄 벡터DB 재초기화", key=f"reinit_{safe_file_key}"):
-                                                if initialize_vector_db_with_documents():
+                                                if initialize_vector_db():
                                                     st.session_state.vector_db_initialized = True
                                                     st.success("벡터 데이터베이스가 성공적으로 재초기화되었습니다!")
                                             # session state 정리
@@ -706,7 +476,7 @@ def manage_uploaded_files() -> None:
                         if st.button("❌ 미리보기 닫기"):
                             del st.session_state.preview_file
                             del st.session_state.preview_file_type
-                            del st.session_state.preview_file_name 
+                            del st.session_state.preview_file_name
 
 ############################### 1단계 : PDF 문서를 벡터DB에 저장하는 함수들 ##########################
 
@@ -915,7 +685,7 @@ def chunk_documents(documents: List[Document]) -> List[Document]:
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
     return text_splitter.split_documents(documents)
 
-## 3: Document를 벡터DB로 저장 (ChromaDB 사용)
+## 3: Document를 벡터DB로 저장 (로컬 임베딩 모델 사용)
 def save_to_vector_store(documents: List[Document]) -> None:
     try:
         # 선택된 임베딩 모델 사용
@@ -923,15 +693,14 @@ def save_to_vector_store(documents: List[Document]) -> None:
         selected_embedding = st.session_state.get('selected_embedding_model', 'jhgan/ko-sroberta-multitask')
         
         st.info(f"임베딩 모델 로딩 중: {selected_embedding}")
-        
-        # ChromaDB에 저장
-        save_to_chroma_store(documents)
-        st.success("✅ 벡터 데이터베이스 저장 완료 (ChromaDB 사용)")
+        vector_store = FAISS.from_documents(documents, embedding=embeddings)
+        vector_store.save_local(get_vector_db_path())
+        st.success("✅ 벡터 데이터베이스 저장 완료 (선택된 임베딩 모델 사용)")
     except Exception as e:
         st.error(f"❌ 벡터 데이터베이스 저장 실패: {str(e)}")
 
-## 4: 벡터DB 초기화 함수 (문서 로딩 포함)
-def initialize_vector_db_with_documents():
+## 4: 벡터DB 초기화 함수
+def initialize_vector_db():
     """PDF_bizMOB_Guide 폴더의 모든 문서를 로드하여 벡터DB를 초기화"""
     with st.spinner("bizMOB Platform 가이드 문서들을 로딩하고 벡터 데이터베이스를 생성하는 중..."):
         # 모든 문서들 로드 (PDF, Excel, PowerPoint)
@@ -948,7 +717,7 @@ def initialize_vector_db_with_documents():
         
         # 벡터DB 저장
         st.info("벡터 데이터베이스에 저장하는 중...")
-        save_to_chroma_store(chunked_documents)
+        save_to_vector_store(chunked_documents)
         
         # 성공적으로 초기화된 모델 정보를 파일에 저장
         try:
@@ -968,314 +737,6 @@ def initialize_vector_db_with_documents():
         
         return True
 
-## 4-1: 벡터DB 초기화 함수 (ChromaDB만 초기화)
-def initialize_vector_db():
-    """벡터 데이터베이스 초기화"""
-    logger.info("Vector database initialization started")
-    
-    if not CHROMADB_AVAILABLE:
-        error_msg = "ChromaDB가 설치되지 않았습니다."
-        logger.error(error_msg)
-        st.error(error_msg)
-        return False
-    
-    try:
-        # ChromaDB 디렉토리 생성
-        chroma_path = get_chroma_db_path()
-        logger.info(f"ChromaDB path: {chroma_path}")
-        os.makedirs(chroma_path, exist_ok=True)
-        logger.info("ChromaDB directory created successfully")
-        
-        # ChromaDB 클라이언트 생성 및 컬렉션 초기화
-        import chromadb
-        import time
-        
-        # 클라이언트 연결 시도
-        max_retries = 3
-        client = None
-        
-        for attempt in range(max_retries):
-            try:
-                client = chromadb.PersistentClient(
-                    path=chroma_path,
-                    settings=chromadb.config.Settings(
-                        allow_reset=True,
-                        anonymized_telemetry=False
-                    )
-                )
-                break
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    logger.warning(f"Client connection attempt {attempt + 1} failed: {e}")
-                    time.sleep(1)
-                else:
-                    raise e
-        
-        if client is None:
-            raise Exception("ChromaDB 클라이언트 연결 실패")
-        
-        collection_name = "bizmob_documents"
-        
-        # 기존 컬렉션이 있으면 삭제하고 새로 생성
-        try:
-            client.delete_collection(name=collection_name)
-            logger.info("Existing collection deleted")
-            time.sleep(0.5)  # 잠시 대기
-        except:
-            logger.info("No existing collection to delete")
-        
-        # 새 컬렉션 생성
-        collection = client.create_collection(name=collection_name)
-        logger.info("New collection created successfully")
-        
-        # 모델 정보 저장
-        model_info = {
-            'ai_model': st.session_state.get('selected_model', 'hyperclovax'),
-            'embedding_model': st.session_state.get('selected_embedding_model', 'jhgan/ko-sroberta-multitask'),
-            'timestamp': pd.Timestamp.now().isoformat()
-        }
-        logger.info(f"Model info: {model_info}")
-        
-        model_info_path = get_model_info_path()
-        logger.info(f"Model info file path: {model_info_path}")
-        
-        with open(model_info_path, 'w', encoding='utf-8') as f:
-            json.dump(model_info, f, ensure_ascii=False, indent=2)
-        
-        st.session_state.vector_db_initialized = True
-        st.success("✅ ChromaDB 벡터 데이터베이스 초기화 완료")
-        logger.info("Vector database initialization successful")
-        return True
-        
-    except Exception as e:
-        error_msg = f"벡터 데이터베이스 초기화 실패: {e}"
-        logger.error(f"Vector database initialization failed: {e}", exc_info=True)
-        st.error(f"❌ {error_msg}")
-        return False
-
-def save_to_chroma_store(documents: list) -> None:
-    """문서를 ChromaDB에 저장"""
-    logger.info(f"Vector database save started - document count: {len(documents)}")
-    
-    if not CHROMADB_AVAILABLE:
-        error_msg = "ChromaDB가 설치되지 않았습니다."
-        logger.error(error_msg)
-        st.error(error_msg)
-        return
-    
-    try:
-        # 환경 변수 설정
-        import os
-        os.environ['TOKENIZERS_PARALLELISM'] = 'false'
-        os.environ['PYTORCH_DISABLE_WARNINGS'] = '1'
-        
-        # 임베딩 모델 로드
-        selected_embedding = st.session_state.get('selected_embedding_model', 'jhgan/ko-sroberta-multitask')
-        logger.info(f"Loading embedding model: {selected_embedding}")
-        
-        try:
-            embeddings = HuggingFaceEmbeddings(model_name=selected_embedding)
-            logger.info("Embedding model loaded successfully")
-        except Exception as e:
-            logger.error(f"Embedding model loading failed: {e}")
-            st.error(f"임베딩 모델 로딩 실패: {e}")
-            return
-        
-        # ChromaDB 클라이언트 생성 (지속적 저장을 위해 경로 지정)
-        try:
-            import chromadb
-            import time
-            chroma_path = get_chroma_db_path()
-            os.makedirs(chroma_path, exist_ok=True)
-            
-            # session_state에서 기존 클라이언트 확인
-            if 'chroma_client' in st.session_state:
-                try:
-                    # 기존 클라이언트 해제 시도
-                    del st.session_state.chroma_client
-                    import gc
-                    gc.collect()
-                    time.sleep(0.5)
-                except:
-                    pass
-            
-            # 지속적 저장을 위한 ChromaDB 클라이언트 생성 (재시도 로직)
-            max_retries = 3
-            client = None
-            
-            for attempt in range(max_retries):
-                try:
-                    client = chromadb.PersistentClient(
-                        path=chroma_path,
-                        settings=chromadb.config.Settings(
-                            allow_reset=True,
-                            anonymized_telemetry=False
-                        )
-                    )
-                    # session_state에 클라이언트 저장
-                    st.session_state.chroma_client = client
-                    break
-                except Exception as e:
-                    if attempt < max_retries - 1:
-                        logger.warning(f"Client connection attempt {attempt + 1} failed: {e}")
-                        time.sleep(1)
-                    else:
-                        raise e
-            
-            if client is None:
-                raise Exception("ChromaDB 클라이언트 연결 실패")
-            
-            collection_name = "bizmob_documents"
-            
-            # 컬렉션 생성 또는 가져오기
-            try:
-                collection = client.get_collection(name=collection_name)
-                logger.info("Existing collection found")
-            except:
-                collection = client.create_collection(name=collection_name)
-                logger.info("New collection created")
-            
-            # 문서 텍스트와 메타데이터 추출 (텍스트 정제)
-            documents_texts = []
-            documents_metadatas = []
-            documents_ids = []
-            
-            for i, doc in enumerate(documents):
-                # 텍스트 정제 (특수문자 및 인코딩 문제 해결)
-                clean_text = doc.page_content.strip()
-                if clean_text:
-                    documents_texts.append(clean_text)
-                    documents_metadatas.append(doc.metadata)
-                    documents_ids.append(f"doc_{i}_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
-            
-            if not documents_texts:
-                st.warning("저장할 문서가 없습니다.")
-                return
-            
-            # 임베딩 생성
-            logger.info("Generating embeddings...")
-            embeddings_list = embeddings.embed_documents(documents_texts)
-            logger.info(f"Generated {len(embeddings_list)} embeddings")
-            
-            # ChromaDB에 저장
-            collection.add(
-                documents=documents_texts,
-                embeddings=embeddings_list,
-                metadatas=documents_metadatas,
-                ids=documents_ids
-            )
-            
-            logger.info("ChromaDB document save completed")
-            st.success(f"✅ {len(documents_texts)}개 문서가 벡터 데이터베이스에 저장되었습니다.")
-            
-            # 저장된 문서 수 확인
-            try:
-                count = collection.count()
-                logger.info(f"Total documents in collection: {count}")
-                st.info(f"📊 현재 벡터 DB에 저장된 문서 수: {count}개")
-                
-                # 저장된 문서 샘플 확인
-                if count > 0:
-                    sample_results = collection.get(limit=1)
-                    if sample_results['documents']:
-                        sample_text = sample_results['documents'][0][:100]
-                        logger.info(f"Sample document: {sample_text}...")
-                        st.info(f"📝 저장된 문서 샘플: {sample_text}...")
-                
-            except Exception as e:
-                logger.warning(f"Could not get collection count: {e}")
-            
-        except Exception as e:
-            logger.error(f"ChromaDB save failed: {e}")
-            st.error(f"벡터 데이터베이스 저장 실패: {e}")
-            return
-        
-    except Exception as e:
-        error_msg = f"벡터 데이터베이스 저장 실패: {e}"
-        logger.error(f"Vector database save failed: {e}", exc_info=True)
-        st.error(f"❌ {error_msg}")
-
-def load_chroma_store():
-    """ChromaDB에서 벡터 스토어 로드"""
-    logger.info("ChromaDB vector store loading started")
-    
-    if not CHROMADB_AVAILABLE:
-        error_msg = "ChromaDB가 설치되지 않았습니다."
-        logger.error(error_msg)
-        st.error(error_msg)
-        return None
-    
-    try:
-        # 임베딩 모델 로드
-        embeddings = get_embedding_model()
-        logger.info("Embedding model loaded")
-        
-        # ChromaDB 클라이언트 생성 (지속적 저장을 위해 경로 지정)
-        import chromadb
-        import time
-        chroma_path = get_chroma_db_path()
-        
-        # 디렉토리가 없으면 생성
-        if not os.path.exists(chroma_path):
-            os.makedirs(chroma_path, exist_ok=True)
-            logger.info(f"Created ChromaDB directory: {chroma_path}")
-        
-        # ChromaDB 클라이언트 생성 (session_state에 저장하지 않음 - 필요할 때만 연결)
-        max_retries = 3
-        client = None
-        
-        for attempt in range(max_retries):
-            try:
-                client = chromadb.PersistentClient(
-                    path=chroma_path,
-                    settings=chromadb.config.Settings(
-                        allow_reset=True,
-                        anonymized_telemetry=False
-                    )
-                )
-                break
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    logger.warning(f"Client connection attempt {attempt + 1} failed: {e}")
-                    time.sleep(1)
-                else:
-                    raise e
-        
-        if client is None:
-            raise Exception("ChromaDB 클라이언트 연결 실패")
-        
-        collection_name = "bizmob_documents"
-        
-        # 컬렉션 가져오기
-        try:
-            collection = client.get_collection(name=collection_name)
-            logger.info("Existing collection found")
-        except:
-            logger.warning("Collection not found, creating new one")
-            collection = client.create_collection(name=collection_name)
-        
-        # LangChain Chroma 벡터 스토어 생성
-        vector_store = Chroma(
-            client=client,
-            collection_name=collection_name,
-            embedding_function=embeddings
-        )
-        logger.info("ChromaDB vector store creation completed")
-        
-        # 벡터 스토어 정보 로깅
-        try:
-            collection_count = collection.count()
-            logger.info(f"ChromaDB collection document count: {collection_count}")
-        except Exception as e:
-            logger.warning(f"Collection info check failed: {e}")
-        
-        return vector_store
-    except Exception as e:
-        error_msg = f"ChromaDB 로드 실패: {e}"
-        logger.error(f"ChromaDB load failed: {e}", exc_info=True)
-        st.error(f"❌ {error_msg}")
-        return None
-
 ############################### 2단계 : RAG 기능 구현과 관련된 함수들 ##########################
 
 ## 사용자 질문에 대한 RAG 처리
@@ -1293,12 +754,9 @@ def process_question(user_question):
         
         # 관련 문서는 별도로 검색 (참조용)
         embeddings = get_embedding_model()
-        vector_store = load_chroma_store()
-        if vector_store:
-            retriever = vector_store.as_retriever(search_kwargs={"k": 3})
-            retrieve_docs: List[Document] = retriever.invoke(user_question)
-        else:
-            retrieve_docs = []
+        new_db = FAISS.load_local(get_vector_db_path(), embeddings, allow_dangerous_deserialization=True)
+        retriever = new_db.as_retriever(search_kwargs={"k": 3})
+        retrieve_docs: List[Document] = retriever.invoke(user_question)
 
         return response, retrieve_docs
     except Exception as e:
@@ -1322,10 +780,8 @@ def get_rag_chain() -> Runnable:
         # 선택된 임베딩 모델 사용
         embeddings = get_embedding_model()
         
-        # ChromaDB 벡터 스토어 로드
-        vector_store = load_chroma_store()
-        if vector_store is None:
-            return None
+        # 벡터 스토어 로드 (allow_dangerous_deserialization=True 추가)
+        vector_store = FAISS.load_local(get_vector_db_path(), embeddings, allow_dangerous_deserialization=True)
         
         # 프롬프트 템플릿
         template = """당신은 bizMOB Platform 전문가입니다. 
@@ -1394,7 +850,7 @@ def natural_sort_key(s):
 
 def check_vector_db_exists():
     """벡터DB가 존재하는지 확인"""
-    return os.path.exists(get_chroma_db_path())
+    return os.path.exists(get_vector_db_path())
 
 def load_saved_model_info():
     """저장된 모델 정보를 불러옴"""
@@ -1555,16 +1011,12 @@ def get_recommended_embedding_model(ai_model_name: str) -> str:
             return value
     return 'jhgan/ko-sroberta-multitask'
 
-def get_chroma_db_path():
-    """ChromaDB 경로 반환"""
-    return "./chroma_db"
-
-def get_model_info_path():
-    """모델 정보 파일 경로 반환"""
+def get_vector_db_path():
+    """현재 선택된 AI 모델에 맞는 벡터DB 경로 반환"""
     ai_model = st.session_state.get('selected_model', 'hyperclovax')
-    import re
+    # 파일명에 사용할 수 없는 문자는 언더스코어로 대체
     safe_model = re.sub(r'[^a-zA-Z0-9_\-]', '_', ai_model)
-    return f"vector_db_model_info_{safe_model}.json" 
+    return f"bizmob_faiss_index_{safe_model}"
 
 def main():
     st.set_page_config("bizMOB Platform 챗봇", layout="wide", page_icon="📱")
@@ -1694,8 +1146,7 @@ def main():
         "문서 파일을 선택하세요",
         type=['pdf', 'xlsx', 'xls', 'pptx', 'ppt', 'docx', 'doc'],
         accept_multiple_files=True,
-        help="여러 파일을 동시에 선택할 수 있습니다.",
-        key="main_file_uploader"
+        help="여러 파일을 동시에 선택할 수 있습니다."
     )
     
     if uploaded_files:
@@ -1723,15 +1174,15 @@ def main():
             st.sidebar.success(f"✅ {success_count}개 파일 업로드 완료")
             
             # 벡터 데이터베이스 재초기화 옵션
-            if st.sidebar.button("🔄 벡터DB 재초기화", type="primary", key="main_reinit"):
-                if initialize_vector_db_with_documents():
+            if st.sidebar.button("🔄 벡터DB 재초기화", type="primary"):
+                if initialize_vector_db():
                     st.session_state.vector_db_initialized = True
                     st.sidebar.success("벡터 데이터베이스 재초기화 완료!")
                 else:
-                    st.sidebar.error("벡터 데이터베이스 초기화에 실패")
+                    st.sidebar.error("벡터 데이터베이스 초기화 실패")
         
         if error_count > 0:
-            st.sidebar.error(f"❌ {error_count}개 파일 업로드에 실패")
+            st.sidebar.error(f"❌ {error_count}개 파일 업로드 실패")
     
     # 메인 컨텐츠
     left_column, right_column = st.columns([1, 1])
@@ -1748,7 +1199,7 @@ def main():
         st.info(f"💡 **{model_display}를 사용하여 PDF, Excel, PowerPoint, Word 문서의 내용을 분석하고 질문에 답변합니다.**")
         
         # 탭 생성 (벡터DB 생성 탭을 가장 오른쪽으로 이동)
-        tab1, tab2, tab3, tab4, tab5 = st.tabs(["📖 챗봇", "📂 파일 관리", "🔗 소스 관리", "🧊 ChromaDB 뷰어", "🗂️ 벡터DB 생성"])
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(["📖 챗봇", "📂 파일 관리", "🔗 소스 관리", "🧊 FAISS 뷰어", "🗂️ 벡터DB 생성"])
         
         with tab1:
             # 현재 선택된 모델 정보 표시
@@ -1780,7 +1231,7 @@ def main():
             else:
                 st.warning("⚠️ 벡터 데이터베이스가 초기화되지 않았습니다. 아래 버튼을 클릭해주세요.")
                 if st.button("🔄 벡터 데이터베이스 초기화", type="primary"):
-                    if initialize_vector_db_with_documents():
+                    if initialize_vector_db():
                         st.session_state.vector_db_initialized = True
                         st.success("벡터 데이터베이스가 성공적으로 초기화되었습니다!")
             
@@ -1906,63 +1357,59 @@ def main():
                     st.write(f"- {repo_path}")
 
         with tab4:
-            st.header("🧊 ChromaDB 벡터DB 뷰어")
+            st.header("🧊 FAISS 벡터DB 뷰어")
             # 모델 변경 시 리플래시
-            if st.session_state.get('refresh_chroma_viewer', False):
-                st.session_state['refresh_chroma_viewer'] = False
+            if st.session_state.get('refresh_faiss_viewer', False):
+                st.session_state['refresh_faiss_viewer'] = False
                 st.rerun()
             if not check_vector_db_exists():
                 st.warning("벡터DB가 아직 생성되지 않았습니다. 먼저 문서를 업로드하고 벡터DB를 생성하세요.")
             else:
                 try:
-                    vector_store = load_chroma_store()
-                    if vector_store:
-                        # ChromaDB에서 문서 정보 가져오기
-                        collection = vector_store._collection
-                        count = collection.count()
-                        
-                        if count > 0:
-                            # 페이지네이션
-                            page_size = 100
-                            total_pages = max(1, (count + page_size - 1) // page_size)
-                            page = st.session_state.get('chroma_viewer_page', 1)
-                            if page < 1:
-                                page = 1
-                            if page > total_pages:
-                                page = total_pages
-                            
-                            # 문서 정보 표시
-                            st.info(f"총 {count}개 문서가 저장되어 있습니다.")
-                            
-                            # 샘플 문서 가져오기
-                            sample_results = collection.get(limit=min(10, count))
-                            if sample_results['documents']:
-                                st.markdown("### 📋 저장된 문서 샘플")
-                                for i, (doc, metadata) in enumerate(zip(sample_results['documents'], sample_results['metadatas'])):
-                                    with st.expander(f"문서 {i+1}"):
-                                        st.write(f"**내용**: {doc[:200]}...")
-                                        st.write(f"**메타데이터**: {metadata}")
-                            
-                            # 페이지 네비게이션
-                            col_prev, col_page, col_next = st.columns([1,2,1])
-                            with col_prev:
-                                if st.button("⬅️ 이전", key="chroma_prev"):
-                                    if page > 1:
-                                        st.session_state['chroma_viewer_page'] = page - 1
-                                        st.rerun()
-                            with col_page:
-                                st.markdown(f"<div style='text-align:center;'>페이지 {page} / {total_pages}</div>", unsafe_allow_html=True)
-                            with col_next:
-                                if st.button("다음 ➡️", key="chroma_next"):
-                                    if page < total_pages:
-                                        st.session_state['chroma_viewer_page'] = page + 1
-                                        st.rerun()
-                        else:
-                            st.info("벡터DB에 저장된 문서가 없습니다.")
+                    embeddings = get_embedding_model()
+                    db = FAISS.load_local(get_vector_db_path(), embeddings, allow_dangerous_deserialization=True)
+                    docs = list(db.docstore._dict.values())
+                    # 페이지네이션 상태
+                    page_size = 100
+                    total_docs = len(docs)
+                    total_pages = max(1, (total_docs + page_size - 1) // page_size)
+                    page = st.session_state.get('faiss_viewer_page', 1)
+                    if page < 1:
+                        page = 1
+                    if page > total_pages:
+                        page = total_pages
+                    start = (page - 1) * page_size
+                    end = start + page_size
+                    rows = []
+                    for doc in docs[start:end]:
+                        meta = doc.metadata.copy()
+                        meta['content_len'] = len(doc.page_content)
+                        meta['content_sample'] = doc.page_content[:100].replace('\n', ' ') + ("..." if len(doc.page_content) > 100 else "")
+                        rows.append(meta)
+                    if total_docs == 0:
+                        st.info("벡터DB에 저장된 문서가 없습니다. 문서를 업로드하고 벡터DB를 생성하세요.")
+                    elif rows:
+                        import pandas as pd
+                        st.dataframe(pd.DataFrame(rows))
+                        st.caption(f"{total_docs}개 중 {start+1}~{min(end, total_docs)}개 문서(청크) 미리보기")
                     else:
-                        st.error("ChromaDB를 불러올 수 없습니다.")
+                        st.info("벡터DB에 저장된 문서가 없습니다.")
+                    # 페이지 네비게이션바
+                    col_prev, col_page, col_next = st.columns([1,2,1])
+                    with col_prev:
+                        if st.button("⬅️ 이전", key="faiss_prev"):
+                            if page > 1:
+                                st.session_state['faiss_viewer_page'] = page - 1
+                                st.rerun()
+                    with col_page:
+                        st.markdown(f"<div style='text-align:center;'>페이지 {page} / {total_pages}</div>", unsafe_allow_html=True)
+                    with col_next:
+                        if st.button("다음 ➡️", key="faiss_next"):
+                            if page < total_pages:
+                                st.session_state['faiss_viewer_page'] = page + 1
+                                st.rerun()
                 except Exception as e:
-                    st.error(f"ChromaDB 벡터DB를 불러오는 중 오류: {e}")
+                    st.error(f"FAISS 벡터DB를 불러오는 중 오류: {e}")
 
         with tab5:
             st.header("🗂️ 벡터DB 생성/초기화")
@@ -1980,7 +1427,7 @@ def main():
             # 벡터DB 생성/초기화 버튼
             if st.button("🗂️ 벡터DB 생성/초기화", type="primary", key="vector_db_create_btn"):
                 with st.spinner("문서를 분석하고 벡터 데이터베이스를 생성하는 중입니다..."):
-                    result = initialize_vector_db_with_documents()
+                    result = initialize_vector_db()
                 if result:
                     st.success("✅ 벡터 데이터베이스가 성공적으로 생성/초기화되었습니다!")
                 else:

@@ -23,7 +23,7 @@ import fitz  # PyMuPDF
 from pptx import Presentation
 from docx import Document as DocxDocument
 from safetensors.torch import load_file
-from transformers import AutoTokenizer, AutoModel
+import sentence_transformers
 
 # 경고 억제
 warnings.filterwarnings("ignore")
@@ -148,12 +148,13 @@ try:
     from langchain_core.runnables import Runnable, RunnablePassthrough
     from langchain.schema.output_parser import StrOutputParser
     from langchain_community.document_loaders import PyMuPDFLoader, UnstructuredExcelLoader, UnstructuredPowerPointLoader, UnstructuredWordDocumentLoader
-    from langchain_huggingface import HuggingFaceEmbeddings
-    from langchain_ollama import OllamaLLM
-    from langchain_community.llms import Ollama
-    from langchain.chains import RetrievalQA
-    from langchain.retrievers import ParentDocumentRetriever
-    from langchain.storage import InMemoryStore
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_ollama import OllamaLLM
+from langchain_community.llms import Ollama
+from langchain.chains import RetrievalQA
+from langchain.retrievers import ParentDocumentRetriever
+from langchain.storage import InMemoryStore
+from langchain_core.embeddings import Embeddings
 except ImportError as e:
     st.error(f"필요한 라이브러리가 설치되지 않았습니다: {e}")
     st.stop()
@@ -1481,93 +1482,94 @@ def get_available_embedding_models():
         }
     }
 
+class SafeSentenceTransformerEmbeddings(Embeddings):
+    """safetensors를 사용하는 안전한 임베딩 클래스"""
+    
+    def __init__(self, model_name: str, device: str = 'cpu'):
+        self.model_name = model_name
+        self.device = device
+        self.model = None
+        self._load_model()
+    
+    def _load_model(self):
+        """모델을 안전하게 로드"""
+        try:
+            # 환경 변수 설정으로 safetensors 강제 사용
+            import os
+            os.environ['SAFETENSORS_FAST_GPU'] = '1'
+            os.environ['TRANSFORMERS_OFFLINE'] = '0'
+            os.environ['TORCH_WEIGHTS_ONLY'] = '1'
+            os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'
+            os.environ['TRANSFORMERS_USE_SAFETENSORS'] = '1'
+            
+            from sentence_transformers import SentenceTransformer
+            
+            self.model = SentenceTransformer(
+                self.model_name,
+                device=self.device,
+                trust_remote_code=True
+            )
+            
+        except Exception as e:
+            st.error(f"모델 로딩 실패: {str(e)}")
+            raise e
+    
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        """문서들을 임베딩"""
+        if self.model is None:
+            self._load_model()
+        
+        try:
+            embeddings = self.model.encode(texts, normalize_embeddings=True)
+            return embeddings.tolist()
+        except Exception as e:
+            st.error(f"임베딩 생성 실패: {str(e)}")
+            raise e
+    
+    def embed_query(self, text: str) -> List[float]:
+        """단일 쿼리를 임베딩"""
+        if self.model is None:
+            self._load_model()
+        
+        try:
+            embedding = self.model.encode([text], normalize_embeddings=True)
+            return embedding[0].tolist()
+        except Exception as e:
+            st.error(f"쿼리 임베딩 실패: {str(e)}")
+            raise e
+
+@st.cache_resource
 def get_embedding_model():
     """선택된 임베딩 모델을 반환 (safetensors 지원)"""
     selected_embedding = st.session_state.get('selected_embedding_model', 'jhgan/ko-sroberta-multitask')
     
-    # safetensors를 사용하여 모델 로딩을 강제하는 설정
-    model_configs = {
-        'jhgan/ko-sroberta-multitask': {
-            'model_kwargs': {'device': 'cpu', 'use_safetensors': True},
-            'encode_kwargs': {'normalize_embeddings': True}
-        },
-        'sentence-transformers/all-MiniLM-L6-v2': {
-            'model_kwargs': {'device': 'cpu', 'use_safetensors': True},
-            'encode_kwargs': {'normalize_embeddings': True}
-        },
-        'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2': {
-            'model_kwargs': {'device': 'cpu', 'use_safetensors': True},
-            'encode_kwargs': {'normalize_embeddings': True}
-        },
-        'sentence-transformers/all-mpnet-base-v2': {
-            'model_kwargs': {'device': 'cpu', 'use_safetensors': True},
-            'encode_kwargs': {'normalize_embeddings': True}
-        },
-        'intfloat/multilingual-e5-large': {
-            'model_kwargs': {'device': 'cpu', 'use_safetensors': True},
-            'encode_kwargs': {'normalize_embeddings': True}
-        }
-    }
-    
-    config = model_configs.get(selected_embedding, {})
-    
     try:
-        # safetensors 사용을 강제하는 환경 변수 설정
-        import os
-        os.environ['SAFETENSORS_FAST_GPU'] = '1'
-        
-        embeddings = HuggingFaceEmbeddings(
+        # 커스텀 임베딩 클래스 사용
+        embeddings = SafeSentenceTransformerEmbeddings(
             model_name=selected_embedding,
-            **config
+            device='cpu'
         )
-        
-        # meta tensor 문제 임시 패치
-        import torch
-        if hasattr(embeddings, 'client') and hasattr(embeddings.client, 'model'):
-            model = embeddings.client.model
-            if hasattr(model, 'device') and str(model.device) == 'meta':
-                try:
-                    model.to_empty('cpu')
-                except Exception as e:
-                    pass  # 실패해도 무시
         
         return embeddings
         
     except Exception as e:
         st.error(f"임베딩 모델 로딩 실패: {str(e)}")
-        st.info("safetensors를 사용하여 모델을 로딩하려고 시도합니다...")
+        st.info("HuggingFaceEmbeddings로 재시도합니다...")
         
-        # fallback: 직접 safetensors 사용
         try:
-            from transformers import AutoTokenizer, AutoModel
-            import torch
-            
-            # 모델과 토크나이저 로딩
-            tokenizer = AutoTokenizer.from_pretrained(selected_embedding, use_safetensors=True)
-            model = AutoModel.from_pretrained(selected_embedding, use_safetensors=True)
-            
-            # CPU로 이동
-            model = model.to('cpu')
-            
-            # HuggingFaceEmbeddings 객체 생성
-            from langchain_community.embeddings import HuggingFaceEmbeddings
-            
+            # HuggingFaceEmbeddings로 fallback
             embeddings = HuggingFaceEmbeddings(
                 model_name=selected_embedding,
-                model_kwargs={'device': 'cpu', 'use_safetensors': True},
+                model_kwargs={'device': 'cpu'},
                 encode_kwargs={'normalize_embeddings': True}
             )
             
             return embeddings
             
-        except Exception as fallback_error:
-            st.error(f"safetensors fallback도 실패: {str(fallback_error)}")
-            # 최종 fallback: 기본 설정으로 시도
-            return HuggingFaceEmbeddings(
-                model_name=selected_embedding,
-                model_kwargs={'device': 'cpu'},
-                encode_kwargs={'normalize_embeddings': True}
-            )
+        except Exception as e2:
+            st.error(f"HuggingFaceEmbeddings 재시도도 실패: {str(e2)}")
+            st.error("임베딩 모델을 로드할 수 없습니다. 다른 모델을 선택해주세요.")
+            return None
 
 def get_recommended_embedding_model(ai_model_name: str) -> str:
     """AI 모델에 따른 권장 임베딩 모델을 반환"""

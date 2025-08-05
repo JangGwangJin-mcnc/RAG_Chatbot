@@ -61,7 +61,7 @@ try:
 except Exception as e:
     print(f"⚠️ torch.load 교체 실패: {e}")
 
-# 환경 변수 설정
+# 환경 변수 설정 - 더 강력한 safetensors 강제 설정
 os.environ['TORCH_WARN_ON_LOAD'] = '0'
 os.environ['TORCH_LOAD_WARN_ONLY'] = '0'
 os.environ['PYTORCH_DISABLE_WARNINGS'] = '1'
@@ -71,6 +71,13 @@ os.environ['TRANSFORMERS_OFFLINE'] = '0'
 os.environ['TORCH_WEIGHTS_ONLY'] = '1'
 os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'
 os.environ['TRANSFORMERS_USE_SAFETENSORS'] = '1'
+# 추가 safetensors 강제 설정
+os.environ['SAFETENSORS_FAST_GPU'] = '1'
+os.environ['TRANSFORMERS_SAFE_SERIALIZATION'] = '1'
+os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '1'
+os.environ['TRANSFORMERS_CACHE'] = './model_cache'
+os.environ['HF_HOME'] = './huggingface'
+os.environ['TORCH_HOME'] = './torch_cache'
 
 # 외부 소스 확장자 리스트 상수 선언
 EXTERNAL_SOURCE_EXTS = [
@@ -151,20 +158,76 @@ try:
     except Exception as e:
         logger.warning(f"PyTorch NumPy compatibility setup failed: {e}")
     
-    # Transformers 라이브러리에서 NumPy 설정
+    # Transformers 라이브러리에서 NumPy 설정 및 safetensors 강제
     try:
         import transformers
         if hasattr(transformers, 'np'):
             transformers.np = numpy
+        
+        # transformers 내부에서 safetensors 강제 사용
+        try:
+            import torch
+            original_tf_torch_load = torch.load
+            
+            def safe_tf_torch_load(f, *args, **kwargs):
+                """transformers용 안전한 torch.load"""
+                try:
+                    from safetensors.torch import load_file
+                    if isinstance(f, str) and os.path.exists(f):
+                        if f.endswith('.safetensors'):
+                            return load_file(f)
+                        else:
+                            kwargs['weights_only'] = True
+                            return original_tf_torch_load(f, *args, **kwargs)
+                    else:
+                        kwargs['weights_only'] = True
+                        return original_tf_torch_load(f, *args, **kwargs)
+                except Exception:
+                    kwargs['weights_only'] = True
+                    return original_tf_torch_load(f, *args, **kwargs)
+            
+            torch.load = safe_tf_torch_load
+            logger.info("Transformers용 torch.load를 safetensors로 교체 완료")
+        except Exception as e:
+            logger.warning(f"Transformers용 torch.load 교체 실패: {e}")
+        
         logger.info("Transformers NumPy compatibility set")
     except Exception as e:
         logger.warning(f"Transformers NumPy compatibility setup failed: {e}")
     
-    # SentenceTransformers에서 NumPy 설정
+    # SentenceTransformers에서 NumPy 설정 및 safetensors 강제
     try:
         import sentence_transformers
         if hasattr(sentence_transformers, 'np'):
             sentence_transformers.np = numpy
+        
+        # sentence_transformers 내부에서 safetensors 강제 사용
+        try:
+            import torch
+            original_st_torch_load = torch.load
+            
+            def safe_st_torch_load(f, *args, **kwargs):
+                """sentence_transformers용 안전한 torch.load"""
+                try:
+                    from safetensors.torch import load_file
+                    if isinstance(f, str) and os.path.exists(f):
+                        if f.endswith('.safetensors'):
+                            return load_file(f)
+                        else:
+                            kwargs['weights_only'] = True
+                            return original_st_torch_load(f, *args, **kwargs)
+                    else:
+                        kwargs['weights_only'] = True
+                        return original_st_torch_load(f, *args, **kwargs)
+                except Exception:
+                    kwargs['weights_only'] = True
+                    return original_st_torch_load(f, *args, **kwargs)
+            
+            torch.load = safe_st_torch_load
+            logger.info("SentenceTransformers용 torch.load를 safetensors로 교체 완료")
+        except Exception as e:
+            logger.warning(f"SentenceTransformers용 torch.load 교체 실패: {e}")
+        
         logger.info("SentenceTransformers NumPy compatibility set")
     except Exception as e:
         logger.warning(f"SentenceTransformers NumPy compatibility setup failed: {e}")
@@ -1541,6 +1604,8 @@ class SafeSentenceTransformerEmbeddings(Embeddings):
             os.environ['TRANSFORMERS_USE_SAFETENSORS'] = '1'
             os.environ['TORCH_WARN_ON_LOAD'] = '0'
             os.environ['TORCH_LOAD_WARN_ONLY'] = '0'
+            os.environ['TRANSFORMERS_SAFE_SERIALIZATION'] = '1'
+            os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '1'
             
             from sentence_transformers import SentenceTransformer
             

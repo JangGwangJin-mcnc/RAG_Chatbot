@@ -28,60 +28,6 @@ import sentence_transformers
 # 경고 억제
 warnings.filterwarnings("ignore")
 
-# torch.load를 완전히 차단하고 safetensors.load_file로 교체
-try:
-    import torch
-    import builtins
-    import sys
-    from types import ModuleType
-    
-    original_torch_load = torch.load
-    
-    def safe_torch_load(f, *args, **kwargs):
-        """torch.load를 완전히 차단하고 safetensors.load_file로 대체"""
-        try:
-            # 파일 경로인 경우 safetensors로 시도
-            if isinstance(f, str) and os.path.exists(f):
-                if f.endswith('.safetensors'):
-                    return load_file(f)
-                else:
-                    # 일반 torch 파일인 경우도 safetensors로 시도
-                    try:
-                        return load_file(f)
-                    except:
-                        # 최후 수단으로만 torch.load 사용
-                        kwargs['weights_only'] = True
-                        return original_torch_load(f, *args, **kwargs)
-            else:
-                # 파일 객체인 경우도 weights_only 강제 적용
-                kwargs['weights_only'] = True
-                return original_torch_load(f, *args, **kwargs)
-        except Exception as e:
-            # 오류 발생 시에도 weights_only 강제 적용
-            kwargs['weights_only'] = True
-            return original_torch_load(f, *args, **kwargs)
-    
-    # torch.load를 완전히 교체
-    torch.load = safe_torch_load
-    
-    # torch 모듈 자체를 패치하여 모든 torch.load 호출을 차단
-    original_torch_getattr = torch.__getattr__
-    def safe_torch_getattr(name):
-        if name == 'load':
-            return safe_torch_load
-        return original_torch_getattr(name)
-    torch.__getattr__ = safe_torch_getattr
-    
-    # sys.modules에서 torch를 찾아서 완전히 패치
-    if 'torch' in sys.modules:
-        torch_module = sys.modules['torch']
-        torch_module.load = safe_torch_load
-    
-    print("✅ torch.load를 완전히 차단하고 safetensors.load_file로 교체 완료")
-    
-except Exception as e:
-    print(f"⚠️ torch.load 교체 실패: {e}")
-
 # 환경 변수 설정 - safetensors 강제 사용
 os.environ['TORCH_WARN_ON_LOAD'] = '0'
 os.environ['TORCH_LOAD_WARN_ONLY'] = '0'
@@ -104,6 +50,15 @@ os.environ['TORCH_HOME'] = './torch_cache'
 EXTERNAL_SOURCE_EXTS = [
     ".py", ".js", ".scss", ".ts", ".vue", ".md", ".txt", ".rst", ".json", ".yaml", ".yml"
 ]
+
+# ChromaDB 사용 가능 여부 확인
+try:
+    import chromadb
+    from langchain_community.vectorstores import Chroma
+    CHROMADB_AVAILABLE = True
+except ImportError:
+    CHROMADB_AVAILABLE = False
+    print("ChromaDB가 설치되지 않았습니다. pip install chromadb를 실행해주세요.")
 
 # 로깅 설정
 def setup_logging():
@@ -1253,6 +1208,7 @@ def load_chroma_store():
         
         # ChromaDB 클라이언트 생성 (지속적 저장을 위해 경로 지정)
         import chromadb
+        from langchain_community.vectorstores import Chroma
         import time
         chroma_path = get_chroma_db_path()
         

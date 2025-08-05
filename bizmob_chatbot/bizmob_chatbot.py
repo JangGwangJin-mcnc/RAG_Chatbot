@@ -186,13 +186,13 @@ try:
     from langchain_core.runnables import Runnable, RunnablePassthrough
     from langchain.schema.output_parser import StrOutputParser
     from langchain_community.document_loaders import PyMuPDFLoader, UnstructuredExcelLoader, UnstructuredPowerPointLoader, UnstructuredWordDocumentLoader
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_ollama import OllamaLLM
-from langchain_community.llms import Ollama
-from langchain.chains import RetrievalQA
-from langchain.retrievers import ParentDocumentRetriever
-from langchain.storage import InMemoryStore
-from langchain_core.embeddings import Embeddings
+    from langchain_huggingface import HuggingFaceEmbeddings
+    from langchain_ollama import OllamaLLM
+    from langchain_community.llms import Ollama
+    from langchain.chains import RetrievalQA
+    from langchain.retrievers import ParentDocumentRetriever
+    from langchain.storage import InMemoryStore
+    from langchain_core.embeddings import Embeddings
 except ImportError as e:
     st.error(f"필요한 라이브러리가 설치되지 않았습니다: {e}")
     st.stop()
@@ -1552,7 +1552,6 @@ class SafeSentenceTransformerEmbeddings(Embeddings):
             )
             
             # 모델이 로드된 후 safetensors 사용 확인
-            st.success(f"✅ {self.model_name} 모델을 safetensors로 안전하게 로드했습니다.")
             
         except Exception as e:
             st.error(f"모델 로딩 실패: {str(e)}")

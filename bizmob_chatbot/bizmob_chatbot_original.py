@@ -950,41 +950,89 @@ def get_embedding_model():
     
     # SafeSentenceTransformerEmbeddings 사용 (torch.load 취약점 방지)
     try:
-        from sentence_transformers import SentenceTransformer
         import os
         
         # 환경 변수 설정으로 safetensors 강제 사용
         os.environ['SAFETENSORS_FAST_GPU'] = '1'
-        os.environ['TRANSFORMERS_USE_SAFETENSORS'] = '1'
+        os.environ['TRANSFORMERS_OFFLINE'] = '0'
         os.environ['TORCH_WEIGHTS_ONLY'] = '1'
+        os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'
+        os.environ['TRANSFORMERS_USE_SAFETENSORS'] = '1'
+        os.environ['TORCH_WARN_ON_LOAD'] = '0'
+        os.environ['TORCH_LOAD_WARN_ONLY'] = '0'
         os.environ['TRANSFORMERS_SAFE_SERIALIZATION'] = '1'
+        os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '1'
         
-        model = SentenceTransformer(
+        # transformers와 safetensors를 직접 사용
+        from transformers import AutoTokenizer, AutoModel
+        import torch
+        import safetensors
+        
+        # 토크나이저 로드
+        tokenizer = AutoTokenizer.from_pretrained(
             selected_embedding,
-            device='cpu',
-            trust_remote_code=True
+            trust_remote_code=True,
+            use_safetensors=True
         )
+        
+        # 모델 로드 (safetensors 강제 사용)
+        model = AutoModel.from_pretrained(
+            selected_embedding,
+            trust_remote_code=True,
+            use_safetensors=True,
+            torch_dtype=torch.float32,
+            low_cpu_mem_usage=True
+        )
+        
+        model.to('cpu')
+        model.eval()
         
         # 임베딩 함수 래퍼 생성
         class SafeEmbeddings:
-            def __init__(self, model):
+            def __init__(self, model, tokenizer):
                 self.model = model
+                self.tokenizer = tokenizer
             
             def embed_documents(self, texts):
-                return self.model.encode(texts).tolist()
+                embeddings = []
+                for text in texts:
+                    # 토크나이징
+                    inputs = self.tokenizer(
+                        text,
+                        return_tensors="pt",
+                        max_length=512,
+                        truncation=True,
+                        padding=True
+                    )
+                    
+                    # 임베딩 생성
+                    with torch.no_grad():
+                        outputs = self.model(**inputs)
+                        # 마지막 hidden state의 평균을 임베딩으로 사용
+                        embedding = outputs.last_hidden_state.mean(dim=1)
+                        embeddings.append(embedding.cpu().numpy().flatten().tolist())
+                
+                return embeddings
             
             def embed_query(self, text: str):
-                return self.model.encode([text])[0].tolist()
+                # 토크나이징
+                inputs = self.tokenizer(
+                    text,
+                    return_tensors="pt",
+                    max_length=512,
+                    truncation=True,
+                    padding=True
+                )
+                
+                # 임베딩 생성
+                with torch.no_grad():
+                    outputs = self.model(**inputs)
+                    # 마지막 hidden state의 평균을 임베딩으로 사용
+                    embedding = outputs.last_hidden_state.mean(dim=1)
+                    return embedding.cpu().numpy().flatten().tolist()
         
-        embeddings = SafeEmbeddings(model)
+        embeddings = SafeEmbeddings(model, tokenizer)
         
-        # meta tensor 문제 임시 패치
-        import torch
-        if hasattr(model, 'device') and str(model.device) == 'meta':
-            try:
-                model.to_empty('cpu')
-            except Exception as e:
-                pass  # 실패해도 무시
         return embeddings
         
     except Exception as e:

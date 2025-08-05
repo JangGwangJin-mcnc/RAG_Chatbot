@@ -8,33 +8,110 @@ class SafeSentenceTransformerEmbeddings:
     def __init__(self, model_name: str = 'sentence-transformers/all-mpnet-base-v2', device: str = 'cpu'):
         self.model_name = model_name
         self.device = device
+        self.model = None
+        self.tokenizer = None
         self._load_model()
     
     def _load_model(self):
-        """모델을 안전하게 로드 (safetensors 사용)"""
+        """모델을 안전하게 로드 (safetensors 직접 사용)"""
         try:
             # 환경 변수 설정으로 safetensors 강제 사용
             os.environ['SAFETENSORS_FAST_GPU'] = '1'
-            os.environ['TRANSFORMERS_USE_SAFETENSORS'] = '1'
+            os.environ['TRANSFORMERS_OFFLINE'] = '0'
             os.environ['TORCH_WEIGHTS_ONLY'] = '1'
+            os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'
+            os.environ['TRANSFORMERS_USE_SAFETENSORS'] = '1'
+            os.environ['TORCH_WARN_ON_LOAD'] = '0'
+            os.environ['TORCH_LOAD_WARN_ONLY'] = '0'
             os.environ['TRANSFORMERS_SAFE_SERIALIZATION'] = '1'
+            os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '1'
             
-            from sentence_transformers import SentenceTransformer
-            self.model = SentenceTransformer(
+            # transformers와 safetensors를 직접 사용
+            from transformers import AutoTokenizer, AutoModel
+            import torch
+            import safetensors
+            
+            # 토크나이저 로드
+            self.tokenizer = AutoTokenizer.from_pretrained(
                 self.model_name,
-                device=self.device,
-                trust_remote_code=True
+                trust_remote_code=True,
+                use_safetensors=True
             )
+            
+            # 모델 로드 (safetensors 강제 사용)
+            self.model = AutoModel.from_pretrained(
+                self.model_name,
+                trust_remote_code=True,
+                use_safetensors=True,
+                torch_dtype=torch.float32,
+                low_cpu_mem_usage=True
+            )
+            
+            self.model.to(self.device)
+            self.model.eval()
+            
         except Exception as e:
             raise Exception(f"모델 로딩 실패: {e}")
     
     def embed_documents(self, texts):
         """문서 임베딩"""
-        return self.model.encode(texts).tolist()
+        if self.model is None:
+            self._load_model()
+        
+        try:
+            embeddings = []
+            for text in texts:
+                # 토크나이징
+                inputs = self.tokenizer(
+                    text,
+                    return_tensors="pt",
+                    max_length=512,
+                    truncation=True,
+                    padding=True
+                )
+                
+                # GPU로 이동
+                inputs = {k: v.to(self.device) for k, v in inputs.items()}
+                
+                # 임베딩 생성
+                with torch.no_grad():
+                    outputs = self.model(**inputs)
+                    # 마지막 hidden state의 평균을 임베딩으로 사용
+                    embedding = outputs.last_hidden_state.mean(dim=1)
+                    embeddings.append(embedding.cpu().numpy().flatten().tolist())
+            
+            return embeddings
+            
+        except Exception as e:
+            raise Exception(f"임베딩 생성 실패: {e}")
     
     def embed_query(self, text: str):
         """쿼리 임베딩"""
-        return self.model.encode([text])[0].tolist()
+        if self.model is None:
+            self._load_model()
+        
+        try:
+            # 토크나이징
+            inputs = self.tokenizer(
+                text,
+                return_tensors="pt",
+                max_length=512,
+                truncation=True,
+                padding=True
+            )
+            
+            # GPU로 이동
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+            
+            # 임베딩 생성
+            with torch.no_grad():
+                outputs = self.model(**inputs)
+                # 마지막 hidden state의 평균을 임베딩으로 사용
+                embedding = outputs.last_hidden_state.mean(dim=1)
+                return embedding.cpu().numpy().flatten().tolist()
+                
+        except Exception as e:
+            raise Exception(f"쿼리 임베딩 실패: {e}")
 
 def hierarchical_search_example():
     """부모-자식 전략 사용 예시"""

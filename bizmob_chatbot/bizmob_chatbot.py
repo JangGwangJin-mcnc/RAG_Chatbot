@@ -1477,16 +1477,17 @@ def get_available_embedding_models():
     }
 
 class SafeSentenceTransformerEmbeddings(Embeddings):
-    """safetensors를 사용하는 안전한 임베딩 클래스"""
+    """safetensors를 직접 사용하는 안전한 임베딩 클래스"""
     
     def __init__(self, model_name: str, device: str = 'cpu'):
         self.model_name = model_name
         self.device = device
         self.model = None
+        self.tokenizer = None
         self._load_model()
     
     def _load_model(self):
-        """모델을 안전하게 로드 (safetensors 강제 사용)"""
+        """모델을 안전하게 로드 (safetensors 직접 사용)"""
         try:
             # 환경 변수 설정으로 safetensors 강제 사용
             import os
@@ -1500,20 +1501,32 @@ class SafeSentenceTransformerEmbeddings(Embeddings):
             os.environ['TRANSFORMERS_SAFE_SERIALIZATION'] = '1'
             os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '1'
             
-            from sentence_transformers import SentenceTransformer
+            # transformers와 safetensors를 직접 사용
+            from transformers import AutoTokenizer, AutoModel
+            import torch
+            import safetensors
             
-            # safetensors를 명시적으로 사용하도록 설정
-            self.model = SentenceTransformer(
+            # 토크나이저 로드
+            self.tokenizer = AutoTokenizer.from_pretrained(
                 self.model_name,
-                device=self.device,
-                trust_remote_code=True
+                trust_remote_code=True,
+                use_safetensors=True
             )
             
-            # 모델이 로드된 후 safetensors 사용 확인
+            # 모델 로드 (safetensors 강제 사용)
+            self.model = AutoModel.from_pretrained(
+                self.model_name,
+                trust_remote_code=True,
+                use_safetensors=True,
+                torch_dtype=torch.float32,
+                low_cpu_mem_usage=True
+            )
+            
+            self.model.to(self.device)
+            self.model.eval()
             
         except Exception as e:
             st.error(f"모델 로딩 실패: {str(e)}")
-            st.info("HuggingFaceEmbeddings로 재시도합니다...")
             raise e
     
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
@@ -1522,8 +1535,29 @@ class SafeSentenceTransformerEmbeddings(Embeddings):
             self._load_model()
         
         try:
-            embeddings = self.model.encode(texts, normalize_embeddings=True)
-            return embeddings.tolist()
+            embeddings = []
+            for text in texts:
+                # 토크나이징
+                inputs = self.tokenizer(
+                    text,
+                    return_tensors="pt",
+                    max_length=512,
+                    truncation=True,
+                    padding=True
+                )
+                
+                # GPU로 이동
+                inputs = {k: v.to(self.device) for k, v in inputs.items()}
+                
+                # 임베딩 생성
+                with torch.no_grad():
+                    outputs = self.model(**inputs)
+                    # 마지막 hidden state의 평균을 임베딩으로 사용
+                    embedding = outputs.last_hidden_state.mean(dim=1)
+                    embeddings.append(embedding.cpu().numpy().flatten().tolist())
+            
+            return embeddings
+            
         except Exception as e:
             st.error(f"임베딩 생성 실패: {str(e)}")
             raise e
@@ -1534,8 +1568,25 @@ class SafeSentenceTransformerEmbeddings(Embeddings):
             self._load_model()
         
         try:
-            embedding = self.model.encode([text], normalize_embeddings=True)
-            return embedding[0].tolist()
+            # 토크나이징
+            inputs = self.tokenizer(
+                text,
+                return_tensors="pt",
+                max_length=512,
+                truncation=True,
+                padding=True
+            )
+            
+            # GPU로 이동
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+            
+            # 임베딩 생성
+            with torch.no_grad():
+                outputs = self.model(**inputs)
+                # 마지막 hidden state의 평균을 임베딩으로 사용
+                embedding = outputs.last_hidden_state.mean(dim=1)
+                return embedding.cpu().numpy().flatten().tolist()
+                
         except Exception as e:
             st.error(f"쿼리 임베딩 실패: {str(e)}")
             raise e

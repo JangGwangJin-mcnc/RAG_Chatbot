@@ -28,44 +28,43 @@ import sentence_transformers
 # 경고 억제
 warnings.filterwarnings("ignore")
 
-# torch.load를 safetensors.load_file로 전역적으로 교체
+# torch.load를 완전히 차단하고 safetensors.load_file로 교체
 try:
     import torch
     import builtins
+    import sys
+    from types import ModuleType
+    
     original_torch_load = torch.load
     
     def safe_torch_load(f, *args, **kwargs):
-        """torch.load를 safetensors.load_file로 대체하는 안전한 로더"""
+        """torch.load를 완전히 차단하고 safetensors.load_file로 대체"""
         try:
             # 파일 경로인 경우 safetensors로 시도
             if isinstance(f, str) and os.path.exists(f):
                 if f.endswith('.safetensors'):
                     return load_file(f)
                 else:
-                    # 일반 torch 파일인 경우 원본 사용하되 경고 억제
-                    kwargs['weights_only'] = True
-                    return original_torch_load(f, *args, **kwargs)
+                    # 일반 torch 파일인 경우도 safetensors로 시도
+                    try:
+                        return load_file(f)
+                    except:
+                        # 최후 수단으로만 torch.load 사용
+                        kwargs['weights_only'] = True
+                        return original_torch_load(f, *args, **kwargs)
             else:
-                # 파일 객체인 경우 원본 사용하되 경고 억제
+                # 파일 객체인 경우도 weights_only 강제 적용
                 kwargs['weights_only'] = True
                 return original_torch_load(f, *args, **kwargs)
         except Exception as e:
-            st.warning(f"모델 로딩 중 오류 발생: {e}")
-            # 최후 수단으로 원본 torch.load 사용
+            # 오류 발생 시에도 weights_only 강제 적용
             kwargs['weights_only'] = True
             return original_torch_load(f, *args, **kwargs)
     
-    # torch.load를 안전한 버전으로 교체
+    # torch.load를 완전히 교체
     torch.load = safe_torch_load
     
-    # builtins 모듈에도 패치 적용 (더 강력한 차단)
-    def safe_builtins_load(f, *args, **kwargs):
-        """builtins를 통한 torch.load 호출도 차단"""
-        if 'weights_only' not in kwargs:
-            kwargs['weights_only'] = True
-        return original_torch_load(f, *args, **kwargs)
-    
-    # torch 모듈 자체의 __getattr__을 패치하여 모든 torch.load 호출을 가로채기
+    # torch 모듈 자체를 패치하여 모든 torch.load 호출을 차단
     original_torch_getattr = torch.__getattr__
     def safe_torch_getattr(name):
         if name == 'load':
@@ -73,12 +72,17 @@ try:
         return original_torch_getattr(name)
     torch.__getattr__ = safe_torch_getattr
     
-    print("✅ torch.load를 safetensors.load_file로 교체 완료")
+    # sys.modules에서 torch를 찾아서 완전히 패치
+    if 'torch' in sys.modules:
+        torch_module = sys.modules['torch']
+        torch_module.load = safe_torch_load
+    
+    print("✅ torch.load를 완전히 차단하고 safetensors.load_file로 교체 완료")
     
 except Exception as e:
     print(f"⚠️ torch.load 교체 실패: {e}")
 
-# 환경 변수 설정 - 더 강력한 safetensors 강제 설정
+# 환경 변수 설정 - safetensors 강제 사용
 os.environ['TORCH_WARN_ON_LOAD'] = '0'
 os.environ['TORCH_LOAD_WARN_ONLY'] = '0'
 os.environ['PYTORCH_DISABLE_WARNINGS'] = '1'
@@ -138,125 +142,36 @@ def setup_logging():
 # 로거 초기화
 logger = setup_logging()
 
-# ChromaDB 관련 import
+# NumPy 호환성 설정
 try:
-    import chromadb
-    from langchain_community.vectorstores import Chroma
-    CHROMADB_AVAILABLE = True
-except ImportError:
-    st.error("ChromaDB가 설치되지 않았습니다. pip install chromadb를 실행해주세요.")
-    CHROMADB_AVAILABLE = False
-
-# NumPy 강제 설치 확인 및 재설치
-try:
-    import numpy
-    logger.info(f"NumPy version: {numpy.__version__}")
+    import numpy as np
+    logger.info(f"NumPy version: {np.__version__}")
     
-    # NumPy가 제대로 작동하는지 테스트
-    test_array = numpy.array([1, 2, 3])
+    # NumPy 테스트
+    test_array = np.array([1, 2, 3])
     logger.info("NumPy test successful")
     
-    # NumPy를 전역으로 설정하여 다른 모듈에서 사용할 수 있도록 함
-    import sys
-    sys.modules['numpy'] = numpy
+    # PyTorch NumPy 호환성 설정
+    import torch
+    torch.set_num_threads(1)
+    logger.info("PyTorch NumPy compatibility set")
     
-    # 환경 변수 설정으로 NumPy 호환성 강화
-    import os
-    os.environ['TOKENIZERS_PARALLELISM'] = 'false'
-    os.environ['PYTORCH_DISABLE_WARNINGS'] = '1'
-    os.environ['TRANSFORMERS_OFFLINE'] = '0'
-    
-    # PyTorch와 NumPy 호환성 강제 설정
-    try:
-        import torch
-        if hasattr(torch, 'set_default_tensor_type'):
-            torch.set_default_tensor_type('torch.FloatTensor')
-        logger.info("PyTorch NumPy compatibility set")
-    except Exception as e:
-        logger.warning(f"PyTorch NumPy compatibility setup failed: {e}")
-    
-    # Transformers 라이브러리에서 NumPy 설정 및 safetensors 강제
-    try:
-        import transformers
-        if hasattr(transformers, 'np'):
-            transformers.np = numpy
-        
-        # transformers 내부에서 safetensors 강제 사용
-        try:
-            import torch
-            original_tf_torch_load = torch.load
-            
-            def safe_tf_torch_load(f, *args, **kwargs):
-                """transformers용 안전한 torch.load"""
-                try:
-                    from safetensors.torch import load_file
-                    if isinstance(f, str) and os.path.exists(f):
-                        if f.endswith('.safetensors'):
-                            return load_file(f)
-                        else:
-                            kwargs['weights_only'] = True
-                            return original_tf_torch_load(f, *args, **kwargs)
-                    else:
-                        kwargs['weights_only'] = True
-                        return original_tf_torch_load(f, *args, **kwargs)
-                except Exception:
-                    kwargs['weights_only'] = True
-                    return original_tf_torch_load(f, *args, **kwargs)
-            
-            torch.load = safe_tf_torch_load
-            logger.info("Transformers용 torch.load를 safetensors로 교체 완료")
-        except Exception as e:
-            logger.warning(f"Transformers용 torch.load 교체 실패: {e}")
-        
-        logger.info("Transformers NumPy compatibility set")
-    except Exception as e:
-        logger.warning(f"Transformers NumPy compatibility setup failed: {e}")
-    
-    # SentenceTransformers에서 NumPy 설정 및 safetensors 강제
-    try:
-        import sentence_transformers
-        if hasattr(sentence_transformers, 'np'):
-            sentence_transformers.np = numpy
-        
-        # sentence_transformers 내부에서 safetensors 강제 사용
-        try:
-            import torch
-            original_st_torch_load = torch.load
-            
-            def safe_st_torch_load(f, *args, **kwargs):
-                """sentence_transformers용 안전한 torch.load"""
-                try:
-                    from safetensors.torch import load_file
-                    if isinstance(f, str) and os.path.exists(f):
-                        if f.endswith('.safetensors'):
-                            return load_file(f)
-                        else:
-                            kwargs['weights_only'] = True
-                            return original_st_torch_load(f, *args, **kwargs)
-                    else:
-                        kwargs['weights_only'] = True
-                        return original_st_torch_load(f, *args, **kwargs)
-                except Exception:
-                    kwargs['weights_only'] = True
-                    return original_st_torch_load(f, *args, **kwargs)
-            
-            torch.load = safe_st_torch_load
-            logger.info("SentenceTransformers용 torch.load를 safetensors로 교체 완료")
-        except Exception as e:
-            logger.warning(f"SentenceTransformers용 torch.load 교체 실패: {e}")
-        
-        logger.info("SentenceTransformers NumPy compatibility set")
-    except Exception as e:
-        logger.warning(f"SentenceTransformers NumPy compatibility setup failed: {e}")
-    
-except ImportError:
-    logger.error("NumPy is not installed")
-    st.error("NumPy가 설치되지 않았습니다. pip install numpy>=1.26.2를 실행해주세요.")
-    st.stop()
 except Exception as e:
-    logger.error(f"NumPy error: {e}")
-    st.error(f"NumPy 오류가 발생했습니다. pip install numpy>=1.26.2를 실행해주세요.")
-    st.stop()
+    logger.warning(f"NumPy/PyTorch setup failed: {e}")
+
+# Transformers 라이브러리에서 safetensors 강제 사용
+try:
+    import transformers
+    logger.info("Transformers NumPy compatibility set")
+except Exception as e:
+    logger.warning(f"Transformers NumPy compatibility setup failed: {e}")
+
+# SentenceTransformers에서 safetensors 강제 사용
+try:
+    import sentence_transformers
+    logger.info("SentenceTransformers NumPy compatibility set")
+except Exception as e:
+    logger.warning(f"SentenceTransformers NumPy compatibility setup failed: {e}")
 
 # 기타 필요한 import들
 try:

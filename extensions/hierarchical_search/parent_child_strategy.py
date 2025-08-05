@@ -2,17 +2,17 @@
 from typing import List, Dict, Any, Optional, Tuple
 from langchain_core.documents.base import Document
 from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings
 import streamlit as st
+import os
 
 from .metadata_manager import MetadataManager
-from .vector_db_hierarchy import VectorDBHierarchy
+from .vector_db_hierarchy import VectorDBHierarchy, SafeSentenceTransformerEmbeddings
 from .search_combiner import SearchCombiner
 
 class ParentChildSearchStrategy:
     """부모-자식 전략을 통한 계층적 검색"""
     
-    def __init__(self, embedding_model: HuggingFaceEmbeddings):
+    def __init__(self, embedding_model: SafeSentenceTransformerEmbeddings):
         self.embedding_model = embedding_model
         self.metadata_manager = MetadataManager()
         self.vector_db_hierarchy = VectorDBHierarchy(embedding_model)

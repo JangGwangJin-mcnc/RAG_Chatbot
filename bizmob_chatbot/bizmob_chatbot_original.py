@@ -936,46 +936,60 @@ def get_available_embedding_models():
     }
 
 def get_embedding_model():
-    """선택된 임베딩 모델을 반환"""
-    selected_embedding = st.session_state.get('selected_embedding_model', 'jhgan/ko-sroberta-multitask')
+    """임베딩 모델 반환"""
+    selected_embedding = st.session_state.get('selected_embedding_model', 'sentence-transformers/all-mpnet-base-v2')
+    
     # 모델별 설정
     model_configs = {
         'jhgan/ko-sroberta-multitask': {
             'model_kwargs': {'device': 'cpu'},
             'encode_kwargs': {'normalize_embeddings': True}
-        },
-        'sentence-transformers/all-MiniLM-L6-v2': {
-            'model_kwargs': {'device': 'cpu'},
-            'encode_kwargs': {'normalize_embeddings': True}
-        },
-        'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2': {
-            'model_kwargs': {'device': 'cpu'},
-            'encode_kwargs': {'normalize_embeddings': True}
-        },
-        'sentence-transformers/all-mpnet-base-v2': {
-            'model_kwargs': {'device': 'cpu'},
-            'encode_kwargs': {'normalize_embeddings': True}
-        },
-        'intfloat/multilingual-e5-large': {
-            'model_kwargs': {'device': 'cpu'},
-            'encode_kwargs': {'normalize_embeddings': True}
         }
     }
     config = model_configs.get(selected_embedding, {})
-    embeddings = HuggingFaceEmbeddings(
-        model_name=selected_embedding,
-        **config
-    )
-    # meta tensor 문제 임시 패치
-    import torch
-    if hasattr(embeddings, 'client') and hasattr(embeddings.client, 'model'):
-        model = embeddings.client.model
+    
+    # SafeSentenceTransformerEmbeddings 사용 (torch.load 취약점 방지)
+    try:
+        from sentence_transformers import SentenceTransformer
+        import os
+        
+        # 환경 변수 설정으로 safetensors 강제 사용
+        os.environ['SAFETENSORS_FAST_GPU'] = '1'
+        os.environ['TRANSFORMERS_USE_SAFETENSORS'] = '1'
+        os.environ['TORCH_WEIGHTS_ONLY'] = '1'
+        os.environ['TRANSFORMERS_SAFE_SERIALIZATION'] = '1'
+        
+        model = SentenceTransformer(
+            selected_embedding,
+            device='cpu',
+            trust_remote_code=True
+        )
+        
+        # 임베딩 함수 래퍼 생성
+        class SafeEmbeddings:
+            def __init__(self, model):
+                self.model = model
+            
+            def embed_documents(self, texts):
+                return self.model.encode(texts).tolist()
+            
+            def embed_query(self, text: str):
+                return self.model.encode([text])[0].tolist()
+        
+        embeddings = SafeEmbeddings(model)
+        
+        # meta tensor 문제 임시 패치
+        import torch
         if hasattr(model, 'device') and str(model.device) == 'meta':
             try:
                 model.to_empty('cpu')
             except Exception as e:
                 pass  # 실패해도 무시
-    return embeddings
+        return embeddings
+        
+    except Exception as e:
+        st.error(f"임베딩 모델 로딩 실패: {e}")
+        return None
 
 def get_recommended_embedding_model(ai_model_name: str) -> str:
     """AI 모델에 따른 권장 임베딩 모델을 반환"""

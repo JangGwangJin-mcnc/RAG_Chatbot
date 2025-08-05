@@ -2,15 +2,47 @@
 from typing import List, Dict, Any, Optional
 from langchain_core.documents.base import Document
 from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings
 import os
 import json
 import re
 
+# SafeSentenceTransformerEmbeddings 클래스 정의 (torch.load 취약점 방지)
+class SafeSentenceTransformerEmbeddings:
+    def __init__(self, model_name: str = 'sentence-transformers/all-mpnet-base-v2', device: str = 'cpu'):
+        self.model_name = model_name
+        self.device = device
+        self._load_model()
+    
+    def _load_model(self):
+        """모델을 안전하게 로드 (safetensors 사용)"""
+        try:
+            # 환경 변수 설정으로 safetensors 강제 사용
+            os.environ['SAFETENSORS_FAST_GPU'] = '1'
+            os.environ['TRANSFORMERS_USE_SAFETENSORS'] = '1'
+            os.environ['TORCH_WEIGHTS_ONLY'] = '1'
+            os.environ['TRANSFORMERS_SAFE_SERIALIZATION'] = '1'
+            
+            from sentence_transformers import SentenceTransformer
+            self.model = SentenceTransformer(
+                self.model_name,
+                device=self.device,
+                trust_remote_code=True
+            )
+        except Exception as e:
+            raise Exception(f"모델 로딩 실패: {e}")
+    
+    def embed_documents(self, texts):
+        """문서 임베딩"""
+        return self.model.encode(texts).tolist()
+    
+    def embed_query(self, text: str):
+        """쿼리 임베딩"""
+        return self.model.encode([text])[0].tolist()
+
 class VectorDBHierarchy:
     """계층적 벡터DB 관리 클래스"""
     
-    def __init__(self, embedding_model: HuggingFaceEmbeddings, base_path: str = "hierarchical_vector_db"):
+    def __init__(self, embedding_model: SafeSentenceTransformerEmbeddings, base_path: str = "hierarchical_vector_db"):
         self.embedding_model = embedding_model
         self.base_path = base_path
         self.parent_db = None

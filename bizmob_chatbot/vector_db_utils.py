@@ -22,11 +22,45 @@ os.environ['PYTORCH_DISABLE_WARNINGS'] = '1'
 # ChromaDB 관련 import
 try:
     from langchain_community.vectorstores import Chroma
+    # HuggingFaceEmbeddings 대신 SafeSentenceTransformerEmbeddings 사용
     from langchain_community.embeddings import HuggingFaceEmbeddings
     CHROMADB_AVAILABLE = True
 except ImportError:
     print("ChromaDB가 설치되지 않았습니다. pip install chromadb를 실행해주세요.")
     CHROMADB_AVAILABLE = False
+
+# SafeSentenceTransformerEmbeddings 클래스 정의 (torch.load 취약점 방지)
+class SafeSentenceTransformerEmbeddings:
+    def __init__(self, model_name: str = 'sentence-transformers/all-mpnet-base-v2', device: str = 'cpu'):
+        self.model_name = model_name
+        self.device = device
+        self._load_model()
+    
+    def _load_model(self):
+        """모델을 안전하게 로드 (safetensors 사용)"""
+        try:
+            # 환경 변수 설정으로 safetensors 강제 사용
+            os.environ['SAFETENSORS_FAST_GPU'] = '1'
+            os.environ['TRANSFORMERS_USE_SAFETENSORS'] = '1'
+            os.environ['TORCH_WEIGHTS_ONLY'] = '1'
+            os.environ['TRANSFORMERS_SAFE_SERIALIZATION'] = '1'
+            
+            from sentence_transformers import SentenceTransformer
+            self.model = SentenceTransformer(
+                self.model_name,
+                device=self.device,
+                trust_remote_code=True
+            )
+        except Exception as e:
+            raise Exception(f"모델 로딩 실패: {e}")
+    
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        """문서 임베딩"""
+        return self.model.encode(texts).tolist()
+    
+    def embed_query(self, text: str) -> List[float]:
+        """쿼리 임베딩"""
+        return self.model.encode([text])[0].tolist()
 
 def get_chroma_db_path():
     """ChromaDB 경로 반환"""
@@ -54,8 +88,8 @@ def get_recommended_embedding_model(ai_model_name: str) -> str:
     return 'sentence-transformers/all-mpnet-base-v2'
 
 def get_embedding_model(embedding_model_name: str = 'sentence-transformers/all-mpnet-base-v2'):
-    """임베딩 모델 반환"""
-    return HuggingFaceEmbeddings(model_name=embedding_model_name)
+    """임베딩 모델 반환 (SafeSentenceTransformerEmbeddings 사용)"""
+    return SafeSentenceTransformerEmbeddings(model_name=embedding_model_name)
 
 def initialize_chroma_db(ai_model: str = 'llama3.2', embedding_model: str = 'sentence-transformers/all-mpnet-base-v2'):
     """ChromaDB 초기화"""
@@ -92,7 +126,8 @@ def save_to_chroma_store(documents: list, embedding_model: str = 'sentence-trans
         return False
     
     try:
-        embeddings = HuggingFaceEmbeddings(model_name=embedding_model)
+        # SafeSentenceTransformerEmbeddings 사용 (torch.load 취약점 방지)
+        embeddings = SafeSentenceTransformerEmbeddings(model_name=embedding_model)
         
         print(f"임베딩 모델 로딩 중: {embedding_model}")
         
@@ -118,7 +153,8 @@ def load_chroma_store(embedding_model: str = 'sentence-transformers/all-mpnet-ba
         return None
     
     try:
-        embeddings = get_embedding_model(embedding_model)
+        # SafeSentenceTransformerEmbeddings 사용 (torch.load 취약점 방지)
+        embeddings = SafeSentenceTransformerEmbeddings(model_name=embedding_model)
         vector_store = Chroma(
             persist_directory=get_chroma_db_path(),
             embedding_function=embeddings

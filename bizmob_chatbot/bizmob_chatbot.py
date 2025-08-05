@@ -31,6 +31,7 @@ warnings.filterwarnings("ignore")
 # torch.load를 safetensors.load_file로 전역적으로 교체
 try:
     import torch
+    import builtins
     original_torch_load = torch.load
     
     def safe_torch_load(f, *args, **kwargs):
@@ -56,6 +57,22 @@ try:
     
     # torch.load를 안전한 버전으로 교체
     torch.load = safe_torch_load
+    
+    # builtins 모듈에도 패치 적용 (더 강력한 차단)
+    def safe_builtins_load(f, *args, **kwargs):
+        """builtins를 통한 torch.load 호출도 차단"""
+        if 'weights_only' not in kwargs:
+            kwargs['weights_only'] = True
+        return original_torch_load(f, *args, **kwargs)
+    
+    # torch 모듈 자체의 __getattr__을 패치하여 모든 torch.load 호출을 가로채기
+    original_torch_getattr = torch.__getattr__
+    def safe_torch_getattr(name):
+        if name == 'load':
+            return safe_torch_load
+        return original_torch_getattr(name)
+    torch.__getattr__ = safe_torch_getattr
+    
     print("✅ torch.load를 safetensors.load_file로 교체 완료")
     
 except Exception as e:
@@ -1178,11 +1195,16 @@ def save_to_chroma_store(documents: list) -> None:
         logger.info(f"Loading embedding model: {selected_embedding}")
         
         try:
-            embeddings = HuggingFaceEmbeddings(model_name=selected_embedding)
+            # SafeSentenceTransformerEmbeddings 사용 (torch.load 취약점 방지)
+            embeddings = SafeSentenceTransformerEmbeddings(
+                model_name=selected_embedding,
+                device='cpu'
+            )
             logger.info("Embedding model loaded successfully")
         except Exception as e:
             logger.error(f"Embedding model loading failed: {e}")
             st.error(f"임베딩 모델 로딩 실패: {e}")
+            st.info("다른 임베딩 모델을 시도해보세요.")
             return
         
         # ChromaDB 클라이언트 생성 (지속적 저장을 위해 경로 지정)

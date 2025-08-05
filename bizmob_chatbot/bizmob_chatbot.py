@@ -1326,7 +1326,7 @@ def get_rag_chain() -> Runnable:
         
         # 프롬프트 템플릿
         template = """당신은 bizMOB Platform 전문가입니다. 
-다음 컨텍스트를 사용하여 질문에 답변해주세요:
+다음 컨텍스트를 사용하여 질문에 답변해주세요. 답변은 한글로 해주세요:
 
 컨텍스트:
 {context}

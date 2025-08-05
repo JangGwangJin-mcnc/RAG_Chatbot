@@ -1017,7 +1017,7 @@ def initialize_vector_db():
         
         # 새 컬렉션 생성
         collection = client.create_collection(name=collection_name)
-        logger.info("New collection created successfully")
+        logger.info("New collection created")
         
         # 모델 정보 저장
         model_info = {
@@ -1123,13 +1123,17 @@ def save_to_chroma_store(documents: list) -> None:
             
             collection_name = "bizmob_documents"
             
-            # 컬렉션 생성 또는 가져오기
+            # 기존 컬렉션이 있으면 삭제하고 새로 생성
             try:
-                collection = client.get_collection(name=collection_name)
-                logger.info("Existing collection found")
+                client.delete_collection(name=collection_name)
+                logger.info("Existing collection deleted")
+                time.sleep(0.5)  # 잠시 대기
             except:
-                collection = client.create_collection(name=collection_name)
-                logger.info("New collection created")
+                logger.info("No existing collection to delete")
+            
+            # 새 컬렉션 생성
+            collection = client.create_collection(name=collection_name)
+            logger.info("New collection created")
             
             # 문서 텍스트와 메타데이터 추출 (텍스트 정제)
             documents_texts = []

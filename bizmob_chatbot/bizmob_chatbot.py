@@ -65,32 +65,36 @@ except ImportError:
 def setup_logging():
     """로깅 설정"""
     log_dir = "./logs"
-    os.makedirs(log_dir, exist_ok=True)
-    
-    log_file = os.path.join(log_dir, f"bizmob_chatbot_{datetime.now().strftime('%Y%m%d')}.log")
-    
-    # 기존 핸들러 제거
-    for handler in logging.root.handlers[:]:
-        logging.root.removeHandler(handler)
     
     # 로거 설정
     logger = logging.getLogger(__name__)
     logger.setLevel(logging.INFO)
     
-    # 파일 핸들러 (UTF-8 인코딩)
-    file_handler = logging.FileHandler(log_file, encoding='utf-8', mode='a')
-    file_handler.setLevel(logging.INFO)
-    file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    file_handler.setFormatter(file_formatter)
+    # 기존 핸들러 제거
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
     
-    # 콘솔 핸들러
+    try:
+        # 로그 디렉토리 생성 시도
+        os.makedirs(log_dir, exist_ok=True)
+        log_file = os.path.join(log_dir, f"bizmob_chatbot_{datetime.now().strftime('%Y%m%d')}.log")
+        
+        # 파일 핸들러 (UTF-8 인코딩)
+        file_handler = logging.FileHandler(log_file, encoding='utf-8', mode='a')
+        file_handler.setLevel(logging.INFO)
+        file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        file_handler.setFormatter(file_formatter)
+        logger.addHandler(file_handler)
+        
+    except (PermissionError, OSError) as e:
+        # 로그 디렉토리 생성 실패 시 콘솔 로깅만 사용
+        print(f"로그 디렉토리 생성 실패: {e}. 콘솔 로깅만 사용합니다.")
+    
+    # 콘솔 핸들러 (항상 추가)
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
     console_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     console_handler.setFormatter(console_formatter)
-    
-    # 핸들러 추가
-    logger.addHandler(file_handler)
     logger.addHandler(console_handler)
     
     return logger

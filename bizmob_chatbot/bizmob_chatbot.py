@@ -1981,6 +1981,208 @@ def main():
                             
                             # 화면 새로고침
                             st.rerun()
+                        else:
+                            st.error("답변을 생성할 수 없습니다. 다시 시도해주세요.")
+                elif user_question and not check_vector_db_exists():
+                    st.error("벡터 데이터베이스가 초기화되지 않았습니다. 먼저 초기화 버튼을 클릭해주세요.")
+            
+            with tab2:
+                # 파일 관리 인터페이스
+                manage_uploaded_files()
+            
+            with tab3:
+                st.header("🔗 외부 소스(GitHub) 관리")
+                st.markdown("GitHub 저장소 경로를 입력하면 소스를 다운로드하여 벡터DB 생성에 포함할 수 있습니다.")
+                github_url = st.text_input("GitHub 저장소 URL 입력", placeholder="https://github.com/username/repo")
+                if st.button("⬇️ 소스 다운로드", key="download_github_btn"):
+                    if github_url.strip().startswith("https://github.com/"):
+                        repo_name = github_url.rstrip('/').split('/')[-1]
+                        dest_dir = os.path.join("external_sources", repo_name)
+                        os.makedirs("external_sources", exist_ok=True)
+                        if os.path.exists(dest_dir):
+                            st.info(f"이미 다운로드된 저장소입니다: {dest_dir}")
+                        else:
+                            with st.spinner("저장소를 다운로드 중입니다..."):
+                                try:
+                                    subprocess.run(["git", "clone", github_url, dest_dir], check=True)
+                                    st.success(f"✅ 저장소 다운로드 완료: {dest_dir}")
+                                except Exception as e:
+                                    st.error(f"❌ 저장소 다운로드 실패: {e}")
+                else:
+                    st.error("올바른 GitHub URL을 입력하세요.")
+            # 다운로드된 소스 목록 표시
+            if os.path.exists("external_sources"):
+                st.markdown("### 📂 다운로드된 소스 목록")
+                for repo in os.listdir("external_sources"):
+                    repo_path = os.path.join("external_sources", repo)
+                    st.write(f"- {repo_path}")
+
+        with tab4:
+            st.header("🧊 ChromaDB 벡터DB 뷰어")
+            # 모델 변경 시 리플래시
+            if st.session_state.get('refresh_chroma_viewer', False):
+                st.session_state['refresh_chroma_viewer'] = False
+                st.rerun()
+            if not check_vector_db_exists():
+                st.warning("벡터DB가 아직 생성되지 않았습니다. 먼저 문서를 업로드하고 벡터DB를 생성하세요.")
+            else:
+                try:
+                    vector_store = load_chroma_store()
+                    if vector_store:
+                        # ChromaDB에서 문서 정보 가져오기
+                        collection = vector_store._collection
+                        count = collection.count()
+                        
+                        if count > 0:
+                            # 페이지네이션
+                            page_size = 100
+                            total_pages = max(1, (count + page_size - 1) // page_size)
+                            page = st.session_state.get('chroma_viewer_page', 1)
+                            if page < 1:
+                                page = 1
+                            if page > total_pages:
+                                page = total_pages
+                            
+                            # 문서 정보 표시
+                            st.info(f"총 {count}개 문서가 저장되어 있습니다.")
+                            
+                            # 샘플 문서 가져오기
+                            sample_results = collection.get(limit=min(10, count))
+                            if sample_results['documents']:
+                                st.markdown("### 📋 저장된 문서 샘플")
+                                for i, (doc, metadata) in enumerate(zip(sample_results['documents'], sample_results['metadatas'])):
+                                    with st.expander(f"문서 {i+1}"):
+                                        st.write(f"**내용**: {doc[:200]}...")
+                                        st.write(f"**메타데이터**: {metadata}")
+                            
+                            # 페이지 네비게이션
+                            col_prev, col_page, col_next = st.columns([1,2,1])
+                            with col_prev:
+                                if st.button("⬅️ 이전", key="chroma_prev"):
+                                    if page > 1:
+                                        st.session_state['chroma_viewer_page'] = page - 1
+                                        st.rerun()
+                            with col_page:
+                                st.markdown(f"<div style='text-align:center;'>페이지 {page} / {total_pages}</div>", unsafe_allow_html=True)
+                            with col_next:
+                                if st.button("다음 ➡️", key="chroma_next"):
+                                    if page < total_pages:
+                                        st.session_state['chroma_viewer_page'] = page + 1
+                                        st.rerun()
+                        else:
+                            st.info("벡터DB에 저장된 문서가 없습니다.")
+                    else:
+                        st.error("ChromaDB를 불러올 수 없습니다.")
+                except Exception as e:
+                    st.error(f"ChromaDB 벡터DB를 불러오는 중 오류: {e}")
+
+        with tab5:
+            st.header("🗂️ 벡터DB 생성/초기화")
+            # 모델 변경 시 리플래시
+            if st.session_state.get('refresh_vector_db_info', False):
+                st.session_state['refresh_vector_db_info'] = False
+                st.rerun()
+            st.markdown("문서 업로드 후, 아래 버튼을 눌러 벡터 데이터베이스를 생성하거나 초기화할 수 있습니다.")
+            st.info("벡터DB는 PDF, Excel, PowerPoint, Word 문서의 내용을 임베딩하여 검색을 빠르게 해줍니다.")
+            # 벡터DB 상태
+            if check_vector_db_exists():
+                st.success("✅ 벡터 데이터베이스가 이미 생성되어 있습니다.")
+                                    else:
+                st.warning("⚠️ 벡터 데이터베이스가 아직 생성되지 않았습니다.")
+            # 벡터DB 생성/초기화 버튼
+            if st.button("🗂️ 벡터DB 생성/초기화", type="primary", key="vector_db_create_btn"):
+                with st.spinner("문서를 분석하고 벡터 데이터베이스를 생성하는 중입니다..."):
+                    result = initialize_vector_db_with_documents()
+                if result:
+                    st.success("✅ 벡터 데이터베이스가 성공적으로 생성/초기화되었습니다!")
+                else:
+                    st.error("❌ 벡터 데이터베이스 생성/초기화에 실패했습니다. 문서가 업로드되어 있는지 확인하세요.")
+            # 벡터DB 정보 표시 (모델별)
+            model_info = load_saved_model_info()
+            st.markdown("---")
+            st.markdown(f"### 현재 선택된 AI 모델 정보")
+            if model_info:
+                st.markdown(f"**AI 모델:** {model_info.get('ai_model', '-')}")
+                st.markdown(f"**임베딩 모델:** {model_info.get('embedding_model', '-')}")
+                st.markdown(f"**생성 시각:** {model_info.get('timestamp', '-')}")
+            else:
+                st.info("이 모델로 생성된 벡터DB 정보가 없습니다. 먼저 벡터DB를 생성하세요.")
+    
+    # 관리자와 일반 사용자 구분
+    if is_admin():
+        # 관리자: 전체 기능 접근
+        left_column, right_column = st.columns([1, 1])
+        
+        with left_column:
+            st.header("📱 bizMOB Platform 챗봇")
+            st.markdown("PDF_bizMOB_Guide 폴더의 bizMOB Platform 가이드 문서를 기반으로 질문에 답변합니다.")
+            # 동적으로 AI 모델명 안내
+            ai_model_name = st.session_state.get('selected_model', 'hyperclovax')
+            if 'hyperclovax' in ai_model_name.lower():
+                model_display = '네이버 HyperCLOVAX 모델'
+            else:
+                model_display = f"Ollama AI 모델: {ai_model_name}"
+            st.info(f"💡 **{model_display}를 사용하여 PDF, Excel, PowerPoint, Word 문서의 내용을 분석하고 질문에 답변합니다.**")
+            
+            # 탭 생성 (벡터DB 생성 탭을 가장 오른쪽으로 이동)
+            tab1, tab2, tab3, tab4, tab5 = st.tabs(["📖 챗봇", "📂 파일 관리", "🔗 소스 관리", "🧊 ChromaDB 뷰어", "🗂️ 벡터DB 생성"])
+            
+            with tab1:
+                # 카카오톡 스타일 채팅 인터페이스
+                st.markdown("### 💬 채팅")
+                
+                # 채팅 메시지들 표시
+                display_chat_messages()
+                
+                # 벡터DB 상태 표시 및 초기화 버튼
+                if check_vector_db_exists():
+                    st.success("✅ 벡터 데이터베이스가 준비되었습니다 (AI 모델별)")
+                else:
+                    st.warning("⚠️ 벡터 데이터베이스가 초기화되지 않았습니다. 아래 버튼을 클릭해주세요.")
+                    if st.button("🔄 벡터 데이터베이스 초기화", type="primary"):
+                        if initialize_vector_db_with_documents():
+                            st.session_state.vector_db_initialized = True
+                            st.success("벡터 데이터베이스가 성공적으로 초기화되었습니다!")
+                
+                st.markdown("---")
+                
+                # 질문 입력 처리 함수
+                def handle_question_submit():
+                    if st.session_state.get('user_question_input', '').strip():
+                        st.session_state['submit_question'] = True
+
+                # 질문 입력
+                # 동적 키를 사용하여 입력창 초기화
+                input_key = f"user_question_input_{st.session_state.get('input_counter', 0)}"
+                user_question = st.text_area(
+                    "bizMOB Platform에 대해 질문해 주세요",
+                    placeholder="bizMOB Platform의 주요 기능은 무엇인가요?",
+                    key=input_key,
+                    on_change=handle_question_submit,
+                    height=80
+                )
+                
+                # 질문 처리
+                if (user_question and check_vector_db_exists()) or st.session_state.get('submit_question', False):
+                    # Enter 키로 제출된 경우 처리 후 상태 초기화
+                    if st.session_state.get('submit_question', False):
+                        st.session_state['submit_question'] = False
+                    
+                    # 사용자 메시지를 채팅 기록에 추가
+                    add_chat_message('user', user_question)
+                    
+                    with st.spinner("질문을 처리하는 중..."):
+                        response, context = process_question(user_question)
+                        
+                        if response:
+                            # AI 답변을 채팅 기록에 추가
+                            add_chat_message('assistant', response)
+                            
+                            # 입력창 초기화를 위한 카운터 증가
+                            st.session_state['input_counter'] = st.session_state.get('input_counter', 0) + 1
+                            
+                            # 화면 새로고침
+                            st.rerun()
                     else:
                         st.error("답변을 생성할 수 없습니다. 다시 시도해주세요.")
             elif user_question and not check_vector_db_exists():

@@ -97,6 +97,57 @@ def setup_logging():
 # 로거 초기화
 logger = setup_logging()
 
+# 채팅 기록 초기화
+def initialize_chat_history():
+    if 'chat_history' not in st.session_state:
+        st.session_state.chat_history = []
+
+# 채팅 메시지 추가
+def add_chat_message(role: str, content: str, timestamp=None):
+    if timestamp is None:
+        timestamp = datetime.now().strftime("%H:%M")
+    
+    if 'chat_history' not in st.session_state:
+        st.session_state.chat_history = []
+    
+    st.session_state.chat_history.append({
+        'role': role,
+        'content': content,
+        'timestamp': timestamp
+    })
+
+# 채팅 메시지들 표시
+def display_chat_messages():
+    if 'chat_history' not in st.session_state:
+        st.session_state.chat_history = []
+    
+    # 채팅 컨테이너 생성
+    chat_container = st.container()
+    
+    with chat_container:
+        # 채팅 메시지들 표시
+        for message in st.session_state.chat_history:
+            if message['role'] == 'user':
+                # 사용자 메시지 (오른쪽 정렬, 파란색 배경)
+                st.markdown(f"""
+                <div style="display: flex; justify-content: flex-end; margin: 10px 0;">
+                    <div style="background-color: #007AFF; color: white; padding: 10px 15px; border-radius: 18px; max-width: 70%; word-wrap: break-word;">
+                        {message['content']}
+                        <div style="font-size: 0.7em; opacity: 0.7; margin-top: 5px;">{message['timestamp']}</div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                # AI 메시지 (왼쪽 정렬, 회색 배경)
+                st.markdown(f"""
+                <div style="display: flex; justify-content: flex-start; margin: 10px 0;">
+                    <div style="background-color: #F0F0F0; color: black; padding: 10px 15px; border-radius: 18px; max-width: 70%; word-wrap: break-word;">
+                        {message['content']}
+                        <div style="font-size: 0.7em; opacity: 0.7; margin-top: 5px;">{message['timestamp']}</div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
 # NumPy 호환성 설정
 try:
     import numpy as np
@@ -107,26 +158,26 @@ try:
     logger.info("NumPy test successful")
     
     # PyTorch NumPy 호환성 설정
-    import torch
+        import torch
     torch.set_num_threads(1)
-    logger.info("PyTorch NumPy compatibility set")
+        logger.info("PyTorch NumPy compatibility set")
     
-except Exception as e:
+    except Exception as e:
     logger.warning(f"NumPy/PyTorch setup failed: {e}")
-
+    
 # Transformers 라이브러리에서 safetensors 강제 사용
-try:
-    import transformers
-    logger.info("Transformers NumPy compatibility set")
-except Exception as e:
-    logger.warning(f"Transformers NumPy compatibility setup failed: {e}")
-
+    try:
+        import transformers
+        logger.info("Transformers NumPy compatibility set")
+    except Exception as e:
+        logger.warning(f"Transformers NumPy compatibility setup failed: {e}")
+    
 # SentenceTransformers에서 safetensors 강제 사용
-try:
-    import sentence_transformers
-    logger.info("SentenceTransformers NumPy compatibility set")
-except Exception as e:
-    logger.warning(f"SentenceTransformers NumPy compatibility setup failed: {e}")
+    try:
+        import sentence_transformers
+        logger.info("SentenceTransformers NumPy compatibility set")
+    except Exception as e:
+        logger.warning(f"SentenceTransformers NumPy compatibility setup failed: {e}")
 
 # 기타 필요한 import들
 try:
@@ -136,13 +187,13 @@ try:
     from langchain_core.runnables import Runnable, RunnablePassthrough
     from langchain.schema.output_parser import StrOutputParser
     from langchain_community.document_loaders import PyMuPDFLoader, UnstructuredExcelLoader, UnstructuredPowerPointLoader, UnstructuredWordDocumentLoader
-    from langchain_huggingface import HuggingFaceEmbeddings
-    from langchain_ollama import OllamaLLM
-    from langchain_community.llms import Ollama
-    from langchain.chains import RetrievalQA
-    from langchain.retrievers import ParentDocumentRetriever
-    from langchain.storage import InMemoryStore
-    from langchain_core.embeddings import Embeddings
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_ollama import OllamaLLM
+from langchain_community.llms import Ollama
+from langchain.chains import RetrievalQA
+from langchain.retrievers import ParentDocumentRetriever
+from langchain.storage import InMemoryStore
+from langchain_core.embeddings import Embeddings
 except ImportError as e:
     st.error(f"필요한 라이브러리가 설치되지 않았습니다: {e}")
     st.stop()
@@ -215,44 +266,38 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# 사용자 역할 확인
 def check_user_role():
-    """사용자 권한 확인"""
-    # 실제 환경에서는 데이터베이스나 인증 시스템을 사용해야 합니다
-    # 여기서는 간단한 예시로 관리자 권한을 확인합니다
     if 'user_role' not in st.session_state:
-        # 기본값은 일반 사용자
-        st.session_state.user_role = 'user'
+        st.session_state.user_role = 'general'
     
-    return st.session_state.user_role
-
+# 관리자 여부 확인
 def is_admin():
-    """관리자 권한 확인"""
-    return check_user_role() == 'admin'
+    return st.session_state.get('user_role') == 'admin'
 
+# 역할 선택기 표시
 def show_role_selector():
-    """사용자 권한 선택기"""
-    st.sidebar.subheader("👤 사용자 권한")
+    st.sidebar.markdown("### 👤 사용자 역할")
     
-    role_options = {
-        'user': '일반 사용자',
-        'admin': '관리자'
-    }
-    
-    current_role = st.session_state.get('user_role', 'user')
-    selected_role = st.selectbox(
-        "권한 선택",
-        options=list(role_options.keys()),
-        format_func=lambda x: role_options[x],
-        index=0 if current_role == 'user' else 1
+    role = st.sidebar.selectbox(
+        "역할을 선택하세요",
+        ["일반 사용자", "관리자"],
+        index=0 if st.session_state.get('user_role') == 'general' else 1
     )
     
-    if selected_role != current_role:
-        st.session_state.user_role = selected_role
+    if role == "관리자":
+        password = st.sidebar.text_input("관리자 비밀번호", type="password")
+        if st.sidebar.button("로그인"):
+            if password == "0000":  # 관리자 비밀번호
+                st.session_state.user_role = 'admin'
+                st.sidebar.success("관리자로 로그인되었습니다!")
+                st.rerun()
+            else:
+                st.sidebar.error("비밀번호가 올바르지 않습니다.")
+    else:
+        st.session_state.user_role = 'general'
+        if st.sidebar.button("일반 사용자로 설정"):
         st.rerun()
-    
-    # 현재 권한 표시
-    role_display = "관리자" if selected_role == 'admin' else "일반 사용자"
-    st.sidebar.markdown(f'<div class="user-role">현재 권한: {role_display}</div>', unsafe_allow_html=True)
 
 ############################### 1단계 : 파일 업로드 및 관리 함수들 ##########################
 
@@ -1132,8 +1177,8 @@ def save_to_chroma_store(documents: list) -> None:
                 logger.info("No existing collection to delete")
             
             # 새 컬렉션 생성
-            collection = client.create_collection(name=collection_name)
-            logger.info("New collection created")
+                collection = client.create_collection(name=collection_name)
+                logger.info("New collection created")
             
             # 문서 텍스트와 메타데이터 추출 (텍스트 정제)
             documents_texts = []
@@ -1682,15 +1727,29 @@ def get_model_info_path():
 def main():
     st.set_page_config("bizMOB Platform 챗봇", layout="wide", page_icon="📱")
 
+    # 사용자 역할 초기화
+    check_user_role()
+
     # 사이드바에 제목과 설명
     st.sidebar.title("📱 bizMOB Platform 챗봇")
+    st.sidebar.markdown("---")
+    
+    # 역할 선택기 표시
+    show_role_selector()
+    
     st.sidebar.markdown("---")
     st.sidebar.markdown("**기능**:")
     st.sidebar.markdown("- bizMOB Platform 가이드 문서 기반 질의응답")
     st.sidebar.markdown("- 플랫폼 사용법 및 기능 안내")
     st.sidebar.markdown("- 실시간 문서 참조")
     st.sidebar.markdown("- **Ollama 설치 모델 사용**")
+    
+    # 관리자만 파일 업로드 기능 표시
+    if is_admin():
     st.sidebar.markdown("- **파일 업로드 및 관리**")
+        st.sidebar.markdown("- **소스 관리**")
+        st.sidebar.markdown("- **ChromaDB 뷰어**")
+        st.sidebar.markdown("- **벡터DB 생성**")
     
     # Ollama 상태 확인 및 모델 선택
     if check_ollama_models():
@@ -1798,7 +1857,8 @@ def main():
     st.sidebar.info(f"**크기**: {selected_embedding_info.get('size', 'Unknown')}")
     st.sidebar.caption(f"**설명**: {selected_embedding_info.get('description', '')}")
     
-    # 사이드바에 파일 업로드 섹션 추가
+    # 관리자만 파일 업로드 섹션 표시
+    if is_admin():
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 📁 파일 업로드")
     
@@ -1847,6 +1907,8 @@ def main():
             st.sidebar.error(f"❌ {error_count}개 파일 업로드에 실패")
     
     # 메인 컨텐츠
+    if is_admin():
+        # 관리자: 전체 기능 접근
     left_column, right_column = st.columns([1, 1])
     
     with left_column:
@@ -1864,28 +1926,11 @@ def main():
         tab1, tab2, tab3, tab4, tab5 = st.tabs(["📖 챗봇", "📂 파일 관리", "🔗 소스 관리", "🧊 ChromaDB 뷰어", "🗂️ 벡터DB 생성"])
         
         with tab1:
-            # 현재 선택된 모델 정보 표시
-            if 'selected_model' in st.session_state:
-                # 저장된 모델 정보가 있는지 확인
-                saved_model_info = load_saved_model_info()
-                if saved_model_info and saved_model_info.get('ai_model') == st.session_state.selected_model:
-                    st.success(f"🤖 **현재 사용 중인 AI 모델 (저장됨)**: {st.session_state.selected_model}")
-                else:
-                    st.info(f"🤖 **현재 사용 중인 AI 모델**: {st.session_state.selected_model}")
-            
-            # 현재 선택된 임베딩 모델 정보 표시
-            if 'selected_embedding_model' in st.session_state:
-                available_embedding_models = get_available_embedding_models()
-                selected_embedding_info = available_embedding_models.get(st.session_state.selected_embedding_model, {})
-                embedding_name = selected_embedding_info.get('name', st.session_state.selected_embedding_model)
-                embedding_language = selected_embedding_info.get('language', 'Unknown')
+                # 카카오톡 스타일 채팅 인터페이스
+                st.markdown("### 💬 채팅")
                 
-                # 저장된 임베딩 모델 정보가 있는지 확인
-                saved_model_info = load_saved_model_info()
-                if saved_model_info and saved_model_info.get('embedding_model') == st.session_state.selected_embedding_model:
-                    st.success(f"🔤 **현재 사용 중인 임베딩 모델 (저장됨)**: {embedding_name} ({embedding_language})")
-                else:
-                    st.info(f"🔤 **현재 사용 중인 임베딩 모델**: {embedding_name} ({embedding_language})")
+                # 채팅 메시지들 표시
+                display_chat_messages()
             
             # 벡터DB 상태 표시 및 초기화 버튼
             if check_vector_db_exists():
@@ -1904,84 +1949,38 @@ def main():
                 if st.session_state.get('user_question_input', '').strip():
                     st.session_state['submit_question'] = True
 
-            # 질문 입력 + 요청 아이콘 버튼 (한 줄에 배치) → 입력창만 남김
+                # 질문 입력
+                # 동적 키를 사용하여 입력창 초기화
+                input_key = f"user_question_input_{st.session_state.get('input_counter', 0)}"
             user_question = st.text_area(
                 "bizMOB Platform에 대해 질문해 주세요",
                 placeholder="bizMOB Platform의 주요 기능은 무엇인가요?",
-                key="user_question_input",
+                    key=input_key,
                 on_change=handle_question_submit,
                 height=80
             )
             
-            # 질문 처리 (텍스트 변경 또는 Enter 키 입력 시)
+                # 질문 처리
             if (user_question and check_vector_db_exists()) or st.session_state.get('submit_question', False):
                 # Enter 키로 제출된 경우 처리 후 상태 초기화
                 if st.session_state.get('submit_question', False):
                     st.session_state['submit_question'] = False
                 
+                    # 사용자 메시지를 채팅 기록에 추가
+                    add_chat_message('user', user_question)
+                    
                 with st.spinner("질문을 처리하는 중..."):
                     response, context = process_question(user_question)
                     
                     if response:
-                        st.markdown("### 🤖 AI 답변")
-                        st.write(response)
-                        
-                        # 관련 문서 표시
-                        if context:
-                            st.markdown("### 📄 참조 문서")
-                            for i, document in enumerate(context):
-                                with st.expander(f"📋 관련 문서 {i+1}"):
-                                    st.write(document.page_content)
-                                    file_name = document.metadata.get('file_name', 'Unknown')
-                                    file_type = document.metadata.get('file_type', 'Unknown')
-                                    
-                                    # 파일 타입에 따른 참조 정보 표시
-                                    if file_type == 'PDF':
-                                        page_number = document.metadata.get('page', 0) + 1
-                                        st.caption(f"출처: {file_name} (PDF 페이지 {page_number})")
-                                        
-                                        # PDF 페이지 보기 버튼
-                                        button_key = f"view_page_{file_name}_{page_number}_{i}"
-                                        if st.button(f"📖 PDF 페이지 보기", key=button_key):
-                                            st.session_state.page_number = str(page_number)
-                                            st.session_state.pdf_file = file_name
-                                            st.session_state.file_type = 'PDF'
-                                            
-                                    elif file_type == 'Excel':
-                                        sheet_name = document.metadata.get('sheet_name', 'Unknown')
-                                        st.caption(f"출처: {file_name} (Excel 시트: {sheet_name})")
-                                        
-                                        # Excel 시트 보기 버튼
-                                        button_key = f"view_excel_{file_name}_{sheet_name}_{i}"
-                                        if st.button(f"📊 Excel 시트 보기", key=button_key):
-                                            st.session_state.excel_file = file_name
-                                            st.session_state.sheet_name = sheet_name
-                                            st.session_state.file_type = 'Excel'
-                                            
-                                    elif file_type == 'PowerPoint':
-                                        slide_number = document.metadata.get('slide_number', 0)
-                                        st.caption(f"출처: {file_name} (PowerPoint 슬라이드 {slide_number})")
-                                        
-                                        # PowerPoint 슬라이드 보기 버튼
-                                        button_key = f"view_ppt_{file_name}_{slide_number}_{i}"
-                                        if st.button(f"📽️ PPT 슬라이드 보기", key=button_key):
-                                            st.session_state.ppt_file = file_name
-                                            st.session_state.slide_number = str(slide_number)
-                                            st.session_state.file_type = 'PowerPoint'
-                                            
-                                    elif file_type == 'Word':
-                                        title = document.metadata.get('title', 'Unknown')
-                                        author = document.metadata.get('author', 'Unknown')
-                                        st.caption(f"출처: {file_name} (Word 문서: {title}, 작성자: {author})")
-                                        
-                                        # Word 문서 보기 버튼
-                                        button_key = f"view_word_{file_name}_{i}"
-                                        if st.button(f"📄 Word 문서 보기", key=button_key):
-                                            st.session_state.word_file = file_name
-                                            st.session_state.file_type = 'Word'
-                                            
-                                    else:
-                                        st.caption(f"출처: {file_name}")
+                            # AI 답변을 채팅 기록에 추가
+                            add_chat_message('assistant', response)
+                            
+                            # 입력창 초기화를 위한 카운터 증가
+                            st.session_state['input_counter'] = st.session_state.get('input_counter', 0) + 1
+                            
+                            # 화면 새로고침
+                            st.rerun()
                     else:
                         st.error("답변을 생성할 수 없습니다. 다시 시도해주세요.")
             elif user_question and not check_vector_db_exists():
@@ -2108,6 +2107,65 @@ def main():
                 st.markdown(f"**생성 시각:** {model_info.get('timestamp', '-')}")
             else:
                 st.info("이 모델로 생성된 벡터DB 정보가 없습니다. 먼저 벡터DB를 생성하세요.")
+    else:
+        # 일반 사용자: 채팅만 가능
+        st.header("📱 bizMOB Platform 챗봇")
+        st.markdown("bizMOB Platform에 대해 질문해 주세요!")
+        
+        # 카카오톡 스타일 채팅 인터페이스
+        st.markdown("### 💬 채팅")
+        
+        # 채팅 메시지들 표시
+        display_chat_messages()
+        
+        # 벡터DB 상태 확인
+        if not check_vector_db_exists():
+            st.warning("⚠️ 벡터 데이터베이스가 초기화되지 않았습니다. 관리자에게 문의하세요.")
+            return
+        
+        st.markdown("---")
+        
+        # 질문 입력 처리 함수
+        def handle_question_submit():
+            if st.session_state.get('user_question_input', '').strip():
+                st.session_state['submit_question'] = True
+
+        # 질문 입력
+        # 동적 키를 사용하여 입력창 초기화
+        input_key = f"user_question_input_{st.session_state.get('input_counter', 0)}"
+        user_question = st.text_area(
+            "bizMOB Platform에 대해 질문해 주세요",
+            placeholder="bizMOB Platform의 주요 기능은 무엇인가요?",
+            key=input_key,
+            on_change=handle_question_submit,
+            height=80
+        )
+        
+        # 질문 처리
+        if (user_question and check_vector_db_exists()) or st.session_state.get('submit_question', False):
+            # Enter 키로 제출된 경우 처리 후 상태 초기화
+            if st.session_state.get('submit_question', False):
+                st.session_state['submit_question'] = False
+            
+            # 사용자 메시지를 채팅 기록에 추가
+            add_chat_message('user', user_question)
+            
+            with st.spinner("질문을 처리하는 중..."):
+                response, context = process_question(user_question)
+                
+                if response:
+                    # AI 답변을 채팅 기록에 추가
+                    add_chat_message('assistant', response)
+                    
+                    # 입력창 초기화를 위한 카운터 증가
+                    st.session_state['input_counter'] = st.session_state.get('input_counter', 0) + 1
+                    
+                    # 화면 새로고침
+                    st.rerun()
+                else:
+                    st.error("답변을 생성할 수 없습니다. 다시 시도해주세요.")
+        elif user_question and not check_vector_db_exists():
+            st.error("벡터 데이터베이스가 초기화되지 않았습니다. 관리자에게 문의하세요.")
 
 if __name__ == "__main__":
     main() 

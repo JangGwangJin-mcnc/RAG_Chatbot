@@ -64,7 +64,9 @@ except ImportError:
 # 로깅 설정
 def setup_logging():
     """로깅 설정"""
-    log_dir = "./logs"
+    # 절대 경로로 로그 디렉토리 설정
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    log_dir = os.path.join(current_dir, "logs")
     
     # 로거 설정
     logger = logging.getLogger(__name__)
@@ -82,9 +84,12 @@ def setup_logging():
         # 파일 핸들러 (UTF-8 인코딩)
         file_handler = logging.FileHandler(log_file, encoding='utf-8', mode='a')
         file_handler.setLevel(logging.INFO)
-        file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(levelname)s - %(message)s')
         file_handler.setFormatter(file_formatter)
         logger.addHandler(file_handler)
+        
+        # 로그 파일 경로 출력
+        print(f"로그 파일 경로: {log_file}")
         
     except (PermissionError, OSError) as e:
         # 로그 디렉토리 생성 실패 시 콘솔 로깅만 사용
@@ -104,11 +109,10 @@ logger = setup_logging()
 
 # UI 컴포넌트 모듈 import
 from ui_components import (
-    apply_css_styles, setup_page_config, initialize_chat_history,
-    add_chat_message, display_chat_messages, check_user_role, is_admin,
-    show_role_selector, show_sidebar_info, show_model_selector,
-    show_embedding_model_info, show_file_upload_section,
-    show_chat_interface, show_admin_interface, show_user_interface
+    apply_css_styles, setup_page_config,
+    show_model_selector,
+    show_embedding_model_info,
+    show_admin_interface
 )
 
 # PyTorch 스레드 설정 (성능 최적화)
@@ -1701,48 +1705,62 @@ def get_model_info_path():
     return f"vector_db_model_info_{safe_model}.json" 
 
 def main():
-    """메인 애플리케이션 (관리자 전용)"""
+    """메인 애플리케이션 (파일 관리 전용)"""
+    logger.info("=== bizMOB 파일 관리 애플리케이션 시작 ===")
+    
     st.set_page_config(
-        page_title="bizMOB 관리자",
-        page_icon="⚙️",
+        page_title="bizMOB 파일 관리",
+        page_icon="📁",
         layout="wide",
         initial_sidebar_state="expanded"
     )
-
-    # 사용자 역할 초기화
-    check_user_role()
-
-    # 사이드바 정보 표시
-    show_sidebar_info()
     
-    # Ollama 상태 확인 및 모델 선택
+    logger.info("페이지 설정 완료")
+
+    # 사이드바 - AI 모델 선택
+    logger.info("AI 모델 선택 시작")
     if check_ollama_models():
         st.sidebar.success("✅ Ollama 연결됨")
+        logger.info("Ollama 연결 성공")
         
         # 사용 가능한 모델 목록 가져오기
         available_models = get_ollama_models()
+        logger.info(f"사용 가능한 모델 수: {len(available_models) if available_models else 0}")
         
         # 모델 선택기 표시
         show_model_selector(available_models, get_recommended_embedding_model, load_saved_model_info)
+        logger.info("모델 선택기 표시 완료")
         
     else:
         st.sidebar.error("❌ Ollama 연결 실패")
         st.sidebar.info("Ollama가 설치되어 있고 실행 중인지 확인해주세요.")
+        logger.warning("Ollama 연결 실패")
     
-    # 임베딩 모델 정보 표시
+    # 사이드바 - 임베딩 모델 정보
+    logger.info("임베딩 모델 정보 표시 시작")
     show_embedding_model_info(get_available_embedding_models, load_saved_model_info, get_recommended_embedding_model)
-    
-    # 관리자만 파일 업로드 섹션 표시
-    show_file_upload_section(save_uploaded_file, validate_file_type, initialize_vector_db_with_documents)
+    logger.info("임베딩 모델 정보 표시 완료")
     
     # 채팅 페이지 링크
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 💬 채팅 페이지")
-    st.sidebar.markdown("[채팅 페이지로 이동](http://localhost:8501/Chat)")
+    st.sidebar.markdown("[채팅 페이지로 이동](/Chat)")
+    logger.info("채팅 페이지 링크 추가 완료")
     
-    # 관리자 인터페이스만 표시
-    show_admin_interface(display_chat_messages, check_vector_db_exists, initialize_vector_db_with_documents,
-                       add_chat_message, process_question, manage_uploaded_files, load_saved_model_info)
+    # 관리자 인터페이스 표시 (채팅 기능 제외)
+    logger.info("관리자 인터페이스 표시 시작")
+    show_admin_interface(
+        None,  # display_chat_messages (None으로 설정하여 채팅 기능 비활성화)
+        check_vector_db_exists, 
+        initialize_vector_db_with_documents,
+        None,  # add_chat_message (None으로 설정하여 채팅 기능 비활성화)
+        None,  # process_question (None으로 설정하여 채팅 기능 비활성화)
+        manage_uploaded_files, 
+        load_saved_model_info
+    )
+    logger.info("관리자 인터페이스 표시 완료")
+    
+    logger.info("=== bizMOB 파일 관리 애플리케이션 로드 완료 ===")
 
 if __name__ == "__main__":
     main() 

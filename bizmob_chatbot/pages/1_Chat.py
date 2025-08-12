@@ -10,10 +10,17 @@ import logging
 from datetime import datetime
 import subprocess
 
+# 현재 디렉토리를 Python 경로에 추가
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, current_dir)
+
 # 로깅 설정
 def setup_logging():
     """로깅 설정"""
     log_dir = "./logs"
+    os.makedirs(log_dir, exist_ok=True)
+    
+    log_file = os.path.join(log_dir, f"chat_page_{datetime.now().strftime('%Y%m%d')}.log")
     
     # 로거 설정
     logger = logging.getLogger(__name__)
@@ -23,22 +30,14 @@ def setup_logging():
     for handler in logger.handlers[:]:
         logger.removeHandler(handler)
     
-    try:
-        # 로그 디렉토리 생성 시도
-        os.makedirs(log_dir, exist_ok=True)
-        log_file = os.path.join(log_dir, f"chat_page_{datetime.now().strftime('%Y%m%d')}.log")
-        
-        # 파일 핸들러 (UTF-8 인코딩)
-        file_handler = logging.FileHandler(log_file, encoding='utf-8', mode='a')
-        file_handler.setLevel(logging.INFO)
-        file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        file_handler.setFormatter(file_formatter)
-        logger.addHandler(file_handler)
-        
-    except (PermissionError, OSError) as e:
-        print(f"로그 디렉토리 생성 실패: {e}. 콘솔 로깅만 사용합니다.")
+    # 파일 핸들러
+    file_handler = logging.FileHandler(log_file, encoding='utf-8', mode='a')
+    file_handler.setLevel(logging.INFO)
+    file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(file_formatter)
+    logger.addHandler(file_handler)
     
-    # 콘솔 핸들러 (항상 추가)
+    # 콘솔 핸들러
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
     console_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
@@ -47,7 +46,6 @@ def setup_logging():
     
     return logger
 
-# 로거 초기화
 logger = setup_logging()
 
 # 페이지 설정
@@ -74,34 +72,34 @@ st.markdown("""
         padding: 10px 15px;
         border-radius: 18px;
         max-width: 70%;
-        margin: 10px 0;
-        margin-left: auto;
+    margin: 10px 0;
+    margin-left: auto;
         word-wrap: break-word;
     }
-    .chat-message-assistant {
+.chat-message-assistant {
         background-color: #F0F0F0;
         color: black;
         padding: 10px 15px;
         border-radius: 18px;
         max-width: 70%;
-        margin: 10px 0;
-        margin-right: auto;
+    margin: 10px 0;
+    margin-right: auto;
         word-wrap: break-word;
-    }
-    .status-box {
-        background-color: #e8f5e8;
-        border: 1px solid #4caf50;
-        border-radius: 5px;
-        padding: 1rem;
-        margin: 1rem 0;
-    }
-    .error-box {
-        background-color: #ffebee;
-        border: 1px solid #f44336;
-        border-radius: 5px;
-        padding: 1rem;
-        margin: 1rem 0;
-    }
+}
+.status-box {
+    background-color: #e8f5e8;
+    border: 1px solid #4caf50;
+    border-radius: 5px;
+    padding: 1rem;
+    margin: 1rem 0;
+}
+.error-box {
+    background-color: #ffebee;
+    border: 1px solid #f44336;
+    border-radius: 5px;
+    padding: 1rem;
+    margin: 1rem 0;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -116,7 +114,7 @@ def initialize_session():
 
 def add_message(role, content):
     """채팅 메시지 추가"""
-    timestamp = datetime.now().strftime("%H:%M")
+        timestamp = datetime.now().strftime("%H:%M")
     st.session_state.chat_messages.append({
         'role': role,
         'content': content,
@@ -125,25 +123,25 @@ def add_message(role, content):
 
 def display_chat():
     """채팅 메시지 표시"""
-    for message in st.session_state.chat_messages:
-        if message['role'] == 'user':
-            st.markdown(f"""
+        for message in st.session_state.chat_messages:
+            if message['role'] == 'user':
+                st.markdown(f"""
             <div class="chat-message-user">
-                {message['content']}
+                        {message['content']}
                 <div style="font-size: 0.7em; opacity: 0.7; margin-top: 5px;">
                     {message['timestamp']}
                 </div>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown(f"""
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown(f"""
             <div class="chat-message-assistant">
-                {message['content']}
+                        {message['content']}
                 <div style="font-size: 0.7em; opacity: 0.7; margin-top: 5px;">
                     {message['timestamp']}
                 </div>
-            </div>
-            """, unsafe_allow_html=True)
+                </div>
+                """, unsafe_allow_html=True)
 
 def simple_chat_response(user_question):
     """간단한 채팅 응답 생성 - Ollama 직접 호출"""
@@ -174,13 +172,13 @@ bizMOB Platform은 모바일 앱 개발을 위한 플랫폼으로, 다음과 같
         logger.info("Ollama 호출 시작...")
         result = subprocess.run([
             'ollama', 'run', st.session_state.selected_model, prompt
-        ], capture_output=True, text=True, timeout=60)
+        ], capture_output=True, text=True, timeout=120)
         
         logger.info(f"Ollama 호출 완료, returncode: {result.returncode}")
         
         if result.returncode == 0:
             response = result.stdout.strip()
-            if response:
+        if response:
                 logger.info(f"응답 생성 성공, 길이: {len(response)}")
                 return response
             else:
@@ -192,8 +190,8 @@ bizMOB Platform은 모바일 앱 개발을 위한 플랫폼으로, 다음과 같
             return error_msg
             
     except subprocess.TimeoutExpired:
-        logger.error("응답 시간 초과")
-        return "응답 시간이 초과되었습니다. 다시 시도해주세요."
+        logger.error("응답 시간 초과 (2분)")
+        return "응답 시간이 초과되었습니다 (2분). 다시 시도해주세요."
     except Exception as e:
         logger.error(f"예상치 못한 오류: {str(e)}", exc_info=True)
         return f"오류가 발생했습니다: {str(e)}"
@@ -201,8 +199,10 @@ bizMOB Platform은 모바일 앱 개발을 위한 플랫폼으로, 다음과 같
 def check_ollama():
     """Ollama 상태 확인"""
     logger.info("Ollama 상태 확인 시작")
+    
     try:
         result = subprocess.run(['ollama', 'list'], capture_output=True, text=True)
+        
         if result.returncode == 0:
             logger.info("Ollama 연결 성공")
             return True
@@ -216,11 +216,14 @@ def check_ollama():
 def get_available_models():
     """사용 가능한 모델 목록 가져오기"""
     logger.info("사용 가능한 모델 목록 조회 시작")
+    
     try:
         result = subprocess.run(['ollama', 'list'], capture_output=True, text=True)
+        
         if result.returncode == 0:
             lines = result.stdout.strip().split('\n')
             models = []
+            
             for line in lines[1:]:  # 첫 번째 줄은 헤더이므로 제외
                 if line.strip():
                     parts = line.split()
@@ -250,8 +253,8 @@ def main():
     # 사이드바 - 간단한 설정
     with st.sidebar:
         st.markdown("### ⚙️ 설정")
-        
-        # Ollama 상태 확인
+    
+    # Ollama 상태 확인
         if check_ollama():
             st.success("✅ Ollama 연결됨")
             
@@ -267,11 +270,10 @@ def main():
                 st.info(f"선택된 모델: {selected_model}")
             else:
                 st.warning("⚠️ 사용 가능한 모델이 없습니다.")
-        else:
+                else:
             st.error("❌ Ollama 연결 실패")
             st.info("Ollama가 설치되어 있고 실행 중인지 확인해주세요.")
-            return
-        
+    
         st.markdown("---")
         st.markdown("### 💡 사용법")
         st.markdown("""
@@ -286,12 +288,12 @@ def main():
     with col1:
         # 채팅 메시지 표시
         display_chat()
-        
-        # 질문 입력
+
+    # 질문 입력
         st.markdown("---")
-        user_question = st.text_area(
-            "bizMOB Platform에 대해 질문해 주세요",
-            placeholder="bizMOB Platform의 주요 기능은 무엇인가요?",
+    user_question = st.text_area(
+        "bizMOB Platform에 대해 질문해 주세요",
+        placeholder="bizMOB Platform의 주요 기능은 무엇인가요?",
             key=f"input_{st.session_state.input_counter}",
             height=100
         )
@@ -340,14 +342,15 @@ def main():
             st.session_state.chat_messages = []
             st.rerun()
         
-        st.markdown("---")
-        st.markdown("### 💡 사용 팁")
-        st.markdown("""
-        - bizMOB Platform에 대한 질문을 자유롭게 해보세요
-        - 구체적인 질문일수록 더 정확한 답변을 받을 수 있습니다
-        - 채팅 기록은 브라우저 세션 동안 유지됩니다
-        - 별도의 설정 없이 바로 사용 가능합니다
-        """)
+    # 하단 안내
+    st.markdown("---")
+    st.markdown("### 💡 사용 팁")
+    st.markdown("""
+    - bizMOB Platform에 대한 질문을 자유롭게 해보세요
+    - 구체적인 질문일수록 더 정확한 답변을 받을 수 있습니다
+    - 채팅 기록은 브라우저 세션 동안 유지됩니다
+    - 별도의 설정 없이 바로 사용 가능합니다
+    """)
 
 if __name__ == "__main__":
     main() 

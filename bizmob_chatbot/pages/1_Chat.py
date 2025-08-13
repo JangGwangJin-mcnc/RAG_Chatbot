@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-bizMOB 간단 채팅 페이지 - 모든 사용자가 바로 사용 가능
+bizMOB 간단 채팅 페이지 - RAG 기반 답변 생성
 """
 
 import streamlit as st
@@ -13,6 +13,21 @@ import subprocess
 # 현재 디렉토리를 Python 경로에 추가
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, current_dir)
+
+# bizmob_chatbot 모듈 import
+try:
+    from bizmob_chatbot import (
+        get_cached_rag_chain,
+        get_cached_vector_store,
+        get_hybrid_retriever,
+        process_question,
+        get_hybrid_search_config,
+        update_hybrid_search_config
+    )
+    RAG_AVAILABLE = True
+except ImportError as e:
+    st.error(f"RAG 모듈 import 실패: {e}")
+    RAG_AVAILABLE = False
 
 # 로깅 설정
 def setup_logging():
@@ -41,7 +56,7 @@ def setup_logging():
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
     console_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-    console_handler.setFormatter(console_formatter)
+    console_handler.setFormatter(file_formatter)
     logger.addHandler(console_handler)
     
     return logger
@@ -66,40 +81,20 @@ st.markdown("""
         text-align: center;
         margin-bottom: 2rem;
     }
-    .chat-message-user {
-        background-color: #007AFF;
-        color: white;
-        padding: 10px 15px;
-        border-radius: 18px;
-        max-width: 70%;
-    margin: 10px 0;
-    margin-left: auto;
-        word-wrap: break-word;
+    .status-box {
+        background-color: #e8f5e8;
+        border: 1px solid #4caf50;
+        border-radius: 5px;
+        padding: 1rem;
+        margin: 1rem 0;
     }
-.chat-message-assistant {
-        background-color: #F0F0F0;
-        color: black;
-        padding: 10px 15px;
-        border-radius: 18px;
-        max-width: 70%;
-    margin: 10px 0;
-    margin-right: auto;
-        word-wrap: break-word;
-}
-.status-box {
-    background-color: #e8f5e8;
-    border: 1px solid #4caf50;
-    border-radius: 5px;
-    padding: 1rem;
-    margin: 1rem 0;
-}
-.error-box {
-    background-color: #ffebee;
-    border: 1px solid #f44336;
-    border-radius: 5px;
-    padding: 1rem;
-    margin: 1rem 0;
-}
+    .error-box {
+        background-color: #ffebee;
+        border: 1px solid #f44336;
+        border-radius: 5px;
+        padding: 1rem;
+        margin: 1rem 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -111,10 +106,12 @@ def initialize_session():
         st.session_state.selected_model = 'exaone3.5'
     if 'input_counter' not in st.session_state:
         st.session_state.input_counter = 0
+    if 'hybrid_search_config' not in st.session_state:
+        st.session_state.hybrid_search_config = {'bm25_weight': 0.3, 'vector_weight': 0.7}
 
 def add_message(role, content):
     """채팅 메시지 추가"""
-        timestamp = datetime.now().strftime("%H:%M")
+    timestamp = datetime.now().strftime("%H:%M")
     st.session_state.chat_messages.append({
         'role': role,
         'content': content,
@@ -123,29 +120,137 @@ def add_message(role, content):
 
 def display_chat():
     """채팅 메시지 표시"""
-        for message in st.session_state.chat_messages:
-            if message['role'] == 'user':
-                st.markdown(f"""
-            <div class="chat-message-user">
-                        {message['content']}
-                <div style="font-size: 0.7em; opacity: 0.7; margin-top: 5px;">
-                    {message['timestamp']}
-                </div>
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.markdown(f"""
-            <div class="chat-message-assistant">
-                        {message['content']}
-                <div style="font-size: 0.7em; opacity: 0.7; margin-top: 5px;">
-                    {message['timestamp']}
-                </div>
-                </div>
-                """, unsafe_allow_html=True)
+    for message in st.session_state.chat_messages:
+        if message['role'] == 'user':
+            # 사용자 메시지 (오른쪽 정렬)
+            with st.container():
+                col1, col2, col3 = st.columns([1, 3, 1])
+                with col2:
+                    # 사용자 메시지 - Streamlit 네이티브 컴포넌트 사용
+                    st.markdown("""
+                    <style>
+                    .user-message {
+                        background-color: #007AFF;
+                        color: white;
+                        padding: 10px 15px;
+                        border-radius: 18px;
+                        margin: 10px 0;
+                        margin-left: auto;
+                        text-align: right;
+                        max-width: 70%;
+                        min-width: 60px;
+                        word-wrap: break-word;
+                        display: inline-block;
+                        white-space: pre-wrap;
+                        line-height: 1.4;
+                    }
+                    </style>
+                    """, unsafe_allow_html=True)
+                    
+                    # 메시지 내용을 안전하게 처리
+                    safe_content = message["content"].replace("<", "&lt;").replace(">", "&gt;")
+                    st.markdown(f'<div class="user-message">{safe_content}</div>', unsafe_allow_html=True)
+                    st.caption(f"⏰ {message['timestamp']}", help="메시지 전송 시간")
+        else:
+            # AI 응답 메시지 (왼쪽 정렬)
+            with st.container():
+                col1, col2, col3 = st.columns([1, 3, 1])
+                with col2:
+                    # AI 메시지 - Streamlit 네이티브 컴포넌트 사용
+                    st.markdown("""
+                    <style>
+                    .ai-message {
+                        background-color: #F0F0F0;
+                        color: black;
+                        padding: 10px 15px;
+                        border-radius: 18px;
+                        margin: 10px 0;
+                        margin-right: auto;
+                        text-align: left;
+                        max-width: 80%;
+                        min-width: 60px;
+                        word-wrap: break-word;
+                        display: inline-block;
+                        white-space: pre-wrap;
+                        line-height: 1.4;
+                    }
+                    </style>
+                    """, unsafe_allow_html=True)
+                    
+                    # 메시지 내용을 안전하게 처리
+                    safe_content = message["content"].replace("<", "&lt;").replace(">", "&gt;")
+                    st.markdown(f'<div class="ai-message">{safe_content}</div>', unsafe_allow_html=True)
+                    st.caption(f"⏰ {message['timestamp']}", help="메시지 생성 시간")
 
-def simple_chat_response(user_question):
-    """간단한 채팅 응답 생성 - Ollama 직접 호출"""
-    logger.info(f"=== 채팅 응답 생성 시작: {user_question[:50]}... ===")
+def rag_chat_response(user_question):
+    """RAG 기반 채팅 응답 생성"""
+    logger.info(f"=== RAG 채팅 응답 생성 시작: {user_question[:50]}... ===")
+    
+    if not RAG_AVAILABLE:
+        logger.error("RAG 모듈을 사용할 수 없습니다")
+        return "죄송합니다. RAG 기능을 사용할 수 없습니다."
+    
+    try:
+        # 현재 하이브리드 검색 설정 가져오기
+        current_config = st.session_state.hybrid_search_config
+        bm25_weight = current_config['bm25_weight']
+        vector_weight = current_config['vector_weight']
+        logger.info(f"현재 하이브리드 검색 설정: BM25={bm25_weight:.2f}, Vector={vector_weight:.2f}")
+        
+        # RAG 설정을 현재 세션 설정으로 업데이트 (매번 검색 시마다)
+        try:
+            config = {
+                'bm25_weight': bm25_weight,
+                'vector_weight': vector_weight,
+                'initial_k': 8,
+                'final_k': 3,
+                'enable_reranking': True,
+                'metadata_boost': True,
+                'recency_boost': True
+            }
+            update_hybrid_search_config(config)
+            logger.info(f"RAG 하이브리드 검색 설정 업데이트 완료: BM25={bm25_weight:.2f}, Vector={vector_weight:.2f}")
+        except Exception as e:
+            logger.warning(f"RAG 설정 업데이트 실패, 기본값 사용: {e}")
+        
+        # RAG 체인으로 질문 처리
+        logger.info("RAG 체인으로 질문 처리 시작...")
+        result = process_question(user_question)
+        
+        if result and len(result) == 2:
+            response, retrieve_docs = result
+            logger.info(f"RAG 응답 생성 성공, 길이: {len(response) if response else 0}")
+            
+            # 관련 문서 정보 추가
+            if retrieve_docs:
+                doc_info = "\n\n📚 **참고 문서:**\n"
+                for i, doc in enumerate(retrieve_docs[:3]):
+                    source = doc.metadata.get('source', 'Unknown')
+                    title = doc.metadata.get('title', 'No Title')
+                    relevance = doc.metadata.get('relevance_score', 'N/A')
+                    doc_info += f"{i+1}. {title} (출처: {source}, 관련성: {relevance})\n"
+                
+                if response:
+                    response += doc_info
+                else:
+                    response = doc_info
+                logger.info(f"참고 문서 {len(retrieve_docs)}개 추가 완료")
+            
+            if not response:
+                response = "죄송합니다. bizMOB Platform에 대한 정보를 찾을 수 없습니다."
+            
+            return response
+        else:
+            logger.warning("RAG 응답이 비어있거나 잘못된 형식입니다")
+            return "죄송합니다. bizMOB Platform에 대한 정보를 찾을 수 없습니다."
+            
+    except Exception as e:
+        logger.error(f"RAG 응답 생성 실패: {e}", exc_info=True)
+        return f"죄송합니다. 응답 생성 중 오류가 발생했습니다: {str(e)}"
+
+def fallback_chat_response(user_question):
+    """폴백: Ollama 직접 호출"""
+    logger.info(f"=== 폴백 채팅 응답 생성: {user_question[:50]}... ===")
     
     try:
         # bizMOB 전문가 프롬프트 구성
@@ -166,23 +271,27 @@ bizMOB Platform은 모바일 앱 개발을 위한 플랫폼으로, 다음과 같
 
 답변:"""
         
-        logger.info(f"프롬프트 구성 완료, 모델: {st.session_state.selected_model}")
+        logger.info(f"폴백 프롬프트 구성 완료, 모델: {st.session_state.selected_model}")
         
         # Ollama 호출
         logger.info("Ollama 호출 시작...")
         result = subprocess.run([
             'ollama', 'run', st.session_state.selected_model, prompt
-        ], capture_output=True, text=True, timeout=120)
+        ], capture_output=True, text=True, timeout=120, encoding='utf-8')
         
         logger.info(f"Ollama 호출 완료, returncode: {result.returncode}")
         
         if result.returncode == 0:
-            response = result.stdout.strip()
-        if response:
-                logger.info(f"응답 생성 성공, 길이: {len(response)}")
-                return response
+            if result.stdout is not None:
+                response = result.stdout.strip()
+                if response:
+                    logger.info(f"폴백 응답 생성 성공, 길이: {len(response)}")
+                    return response
+                else:
+                    logger.warning("폴백 응답이 비어있습니다")
+                    return "죄송합니다. 응답을 생성할 수 없습니다."
             else:
-                logger.warning("응답이 비어있습니다")
+                logger.warning("stdout이 None입니다")
                 return "죄송합니다. 응답을 생성할 수 없습니다."
         else:
             error_msg = f"모델 호출 중 오류가 발생했습니다: {result.stderr}"
@@ -193,7 +302,7 @@ bizMOB Platform은 모바일 앱 개발을 위한 플랫폼으로, 다음과 같
         logger.error("응답 시간 초과 (2분)")
         return "응답 시간이 초과되었습니다 (2분). 다시 시도해주세요."
     except Exception as e:
-        logger.error(f"예상치 못한 오류: {str(e)}", exc_info=True)
+        logger.error(f"폴백 응답 생성 중 예상치 못한 오류: {str(e)}", exc_info=True)
         return f"오류가 발생했습니다: {str(e)}"
 
 def check_ollama():
@@ -213,6 +322,25 @@ def check_ollama():
         logger.error(f"Ollama 상태 확인 중 오류: {str(e)}")
         return False
 
+def update_rag_config():
+    """RAG 하이브리드 검색 설정 업데이트"""
+    if RAG_AVAILABLE:
+        try:
+            current_config = st.session_state.hybrid_search_config
+            config = {
+                'bm25_weight': current_config['bm25_weight'],
+                'vector_weight': current_config['vector_weight'],
+                'initial_k': 8,
+                'final_k': 3,
+                'enable_reranking': True,
+                'metadata_boost': True,
+                'recency_boost': True
+            }
+            update_hybrid_search_config(config)
+            logger.info(f"RAG 설정 자동 업데이트 완료: BM25={current_config['bm25_weight']:.2f}, Vector={current_config['vector_weight']:.2f}")
+        except Exception as e:
+            logger.warning(f"RAG 설정 자동 업데이트 실패: {e}")
+
 def get_available_models():
     """사용 가능한 모델 목록 가져오기"""
     logger.info("사용 가능한 모델 목록 조회 시작")
@@ -222,16 +350,16 @@ def get_available_models():
         
         if result.returncode == 0:
             lines = result.stdout.strip().split('\n')
-            models = []
+            values = []
             
             for line in lines[1:]:  # 첫 번째 줄은 헤더이므로 제외
                 if line.strip():
                     parts = line.split()
                     if len(parts) >= 1:
                         model_name = parts[0]
-                        models.append(model_name)
-            logger.info(f"사용 가능한 모델 {len(models)}개 발견: {models}")
-            return models
+                        values.append(model_name)
+            logger.info(f"사용 가능한 모델 {len(values)}개 발견: {values}")
+            return values
         else:
             logger.warning(f"모델 목록 조회 실패, returncode: {result.returncode}")
             return []
@@ -241,20 +369,138 @@ def get_available_models():
 
 def main():
     """메인 함수"""
-    logger.info("=== bizMOB 채팅 페이지 시작 ===")
+    logger.info("=== bizMOB RAG 채팅 페이지 시작 ===")
     
-    st.markdown('<h1 class="main-header">🤖 bizMOB Platform 챗봇</h1>', unsafe_allow_html=True)
+
+    
+    st.markdown('<h1 class="main-header">🤖 bizMOB Platform RAG 챗봇</h1>', unsafe_allow_html=True)
     
     # 세션 초기화
     logger.info("세션 초기화 시작")
     initialize_session()
     logger.info("세션 초기화 완료")
     
-    # 사이드바 - 간단한 설정
+    # 사이드바 - 설정 및 정보
     with st.sidebar:
         st.markdown("### ⚙️ 설정")
-    
-    # Ollama 상태 확인
+        
+        # RAG 상태 표시
+        if RAG_AVAILABLE:
+            st.success("✅ RAG 기능 사용 가능")
+        else:
+            st.warning("⚠️ RAG 기능 사용 불가")
+        
+        # 하이브리드 검색 설정
+        st.markdown("#### 🔍 하이브리드 검색 설정")
+        
+        # BM25 가중치 슬라이더
+        bm25_weight = st.slider(
+            "BM25 가중치",
+            min_value=0.0,
+            max_value=1.0,
+            value=st.session_state.hybrid_search_config['bm25_weight'],
+            step=0.1,
+            key="bm25_weight_slider"
+        )
+        
+        # Vector 가중치 자동 계산 (BM25와 합이 1.0이 되도록)
+        vector_weight = round(1.0 - bm25_weight, 1)
+        
+        # Vector 가중치 표시 (자동 동기화)
+        st.info(f"🔗 **벡터 가중치: {vector_weight:.1f}** (자동 동기화)")
+        
+        # 가중치 합계 표시 (항상 1.0이어야 함)
+        total_weight = bm25_weight + vector_weight
+        st.success(f"✅ 가중치 합계: {total_weight:.1f} (자동 동기화)")
+        
+        # 세션 상태 업데이트
+        st.session_state.hybrid_search_config = {
+            'bm25_weight': bm25_weight,
+            'vector_weight': vector_weight
+        }
+        
+        # RAG 설정 자동 업데이트 (가중치가 변경될 때마다)
+        if RAG_AVAILABLE:
+            try:
+                config = {
+                    'bm25_weight': bm25_weight,
+                    'vector_weight': vector_weight,
+                    'initial_k': 8,
+                    'final_k': 3,
+                    'enable_reranking': True,
+                    'metadata_boost': True,
+                    'recency_boost': True
+                }
+                update_hybrid_search_config(config)
+                st.success(f"✅ RAG 설정이 자동으로 업데이트되었습니다! (BM25: {bm25_weight:.1f}, Vector: {vector_weight:.1f})")
+                logger.info(f"RAG 설정 자동 업데이트 완료: BM25={bm25_weight:.2f}, Vector={vector_weight:.2f}")
+            except Exception as e:
+                st.warning(f"⚠️ RAG 설정 자동 업데이트 실패: {e}")
+                logger.error(f"RAG 설정 자동 업데이트 실패: {e}")
+        else:
+            st.success(f"✅ 하이브리드 검색 설정이 저장되었습니다! (BM25: {bm25_weight:.1f}, Vector: {vector_weight:.1f})")
+        
+        # 현재 설정 상태 표시
+        st.info(f"**현재 설정:** BM25: {bm25_weight:.1f}, Vector: {vector_weight:.1f}")
+        
+        # 설정 변경 안내
+        st.caption("💡 BM25 슬라이더를 조정하면 Vector 가중치가 자동으로 동기화되고 RAG 설정이 업데이트됩니다.")
+        
+        # 디버깅 정보 표시 (개발용)
+        if st.checkbox("🔍 디버깅 정보 표시", key="debug_info"):
+            st.json(st.session_state.hybrid_search_config)
+            
+            # 가중치 테스트 버튼
+            if st.button("🧪 가중치 테스트", key="test_weights"):
+                try:
+                    from bizmob_chatbot import test_hybrid_search, get_cached_vector_store
+                    vector_store = get_cached_vector_store()
+                    if vector_store:
+                        test_result = test_hybrid_search(
+                            "bizMOB 4.0", 
+                            vector_store,
+                            bm25_weight=bm25_weight,
+                            vector_weight=vector_weight
+                        )
+                        st.success(f"테스트 완료! 검색 시간: {test_result.get('search_time', 'N/A')}초")
+                        st.json(test_result)
+                    else:
+                        st.warning("벡터 스토어를 사용할 수 없습니다.")
+                except Exception as e:
+                    st.error(f"테스트 실패: {e}")
+        
+        # 설정 저장 버튼 (수동 저장용)
+        if st.button("💾 수동 설정 저장", use_container_width=True):
+            st.session_state.hybrid_search_config = {
+                'bm25_weight': bm25_weight,
+                'vector_weight': vector_weight
+            }
+            
+            # RAG 설정 업데이트
+            if RAG_AVAILABLE:
+                try:
+                    config = {
+                        'bm25_weight': bm25_weight,
+                        'vector_weight': vector_weight,
+                        'initial_k': 8,
+                        'final_k': 3,
+                        'enable_reranking': True,
+                        'metadata_boost': True,
+                        'recency_boost': True
+                    }
+                    update_hybrid_search_config(config)
+                    st.success("하이브리드 검색 설정이 저장되었습니다!")
+                except Exception as e:
+                    st.warning(f"RAG 설정 업데이트 실패: {e}")
+            else:
+                st.success("하이브리드 검색 설정이 저장되었습니다!")
+        
+        st.markdown("---")
+        
+        # AI 모델 설정
+        st.markdown("#### 🤖 AI 모델 설정")
+        
+        # Ollama 상태 확인
         if check_ollama():
             st.success("✅ Ollama 연결됨")
             
@@ -270,64 +516,14 @@ def main():
                 st.info(f"선택된 모델: {selected_model}")
             else:
                 st.warning("⚠️ 사용 가능한 모델이 없습니다.")
-                else:
+        else:
             st.error("❌ Ollama 연결 실패")
             st.info("Ollama가 설치되어 있고 실행 중인지 확인해주세요.")
-    
-        st.markdown("---")
-        st.markdown("### 💡 사용법")
-        st.markdown("""
-        1. 질문을 입력하세요
-        2. '질문하기' 버튼을 클릭하세요
-        3. AI가 bizMOB Platform에 대해 답변합니다
-        """)
-    
-    # 메인 채팅 인터페이스
-    col1, col2 = st.columns([3, 1])
-    
-    with col1:
-        # 채팅 메시지 표시
-        display_chat()
-
-    # 질문 입력
-        st.markdown("---")
-    user_question = st.text_area(
-        "bizMOB Platform에 대해 질문해 주세요",
-        placeholder="bizMOB Platform의 주요 기능은 무엇인가요?",
-            key=f"input_{st.session_state.input_counter}",
-            height=100
-        )
         
-        # 질문 제출 버튼
-        if st.button("질문하기", type="primary", use_container_width=True):
-            logger.info("질문하기 버튼 클릭됨")
-            
-            if user_question and user_question.strip():
-                logger.info(f"사용자 질문 수신: {user_question.strip()}")
-                
-                # 사용자 메시지 추가
-                add_message('user', user_question.strip())
-                logger.info("사용자 메시지 추가 완료")
-                
-                # AI 응답 생성
-                with st.spinner("답변을 생성하는 중..."):
-                    logger.info("AI 응답 생성 시작")
-                    response = simple_chat_response(user_question.strip())
-                    logger.info(f"AI 응답 생성 완료: {response[:100]}...")
-                    
-                    add_message('assistant', response)
-                    logger.info("AI 메시지 추가 완료")
-                
-                # 입력창 초기화
-                st.session_state.input_counter += 1
-                logger.info("입력창 초기화 완료, 페이지 새로고침")
-                st.rerun()
-            else:
-                logger.warning("빈 질문 입력 시도")
-                st.error("질문을 입력해주세요.")
-    
-    with col2:
-        st.markdown("### 📊 채팅 정보")
+        st.markdown("---")
+        
+        # 채팅 정보
+        st.markdown("#### 📊 채팅 정보")
         st.info(f"총 메시지: {len(st.session_state.chat_messages)}개")
         
         if st.session_state.chat_messages:
@@ -341,15 +537,72 @@ def main():
         if st.button("🗑️ 채팅 기록 초기화", use_container_width=True):
             st.session_state.chat_messages = []
             st.rerun()
+
+    st.markdown("---")
+    st.markdown("### 💡 사용법")
+    st.markdown("""
+    1. 질문을 입력하세요
+    2. '질문하기' 버튼을 클릭하세요
+    3. AI가 bizMOB Platform 문서를 기반으로 답변합니다
+    4. RAG 기능으로 관련 문서를 참고하여 정확한 답변을 제공합니다
+    """)
+
+    # 메인 채팅 인터페이스
+    # 채팅 메시지 표시
+    display_chat()
+
+    # 질문 입력
+    st.markdown("---")
+    user_question = st.text_area(
+        "bizMOB Platform에 대해 질문해 주세요",
+        placeholder="bizMOB Platform의 주요 기능은 무엇인가요?",
+        key=f"input_{st.session_state.input_counter}",
+        height=100
+    )
+            
+    # 질문 제출 버튼
+    if st.button("질문하기", type="primary", use_container_width=True):
+        logger.info("질문하기 버튼 클릭됨")
         
+        if user_question and user_question.strip():
+            logger.info(f"사용자 질문 수신: {user_question.strip()}")
+            
+            # 사용자 메시지 추가
+            add_message('user', user_question.strip())
+            logger.info("사용자 메시지 추가 완료")
+            
+            # AI 응답 생성 (RAG 우선, 폴백으로 Ollama 직접 호출)
+            with st.spinner("답변을 생성하는 중..."):
+                logger.info("AI 응답 생성 시작")
+                
+                if RAG_AVAILABLE:
+                    logger.info("RAG 기반 응답 생성 시도...")
+                    response = rag_chat_response(user_question.strip())
+                else:
+                    logger.info("RAG 사용 불가, 폴백 응답 생성...")
+                    response = fallback_chat_response(user_question.strip())
+                
+                logger.info(f"AI 응답 생성 완료: {response[:100]}...")
+                
+                add_message('assistant', response)
+                logger.info("AI 메시지 추가 완료")
+            
+            # 입력창 초기화
+            st.session_state.input_counter += 1
+            logger.info("입력창 초기화 완료, 페이지 새로고침")
+            st.rerun()
+        else:
+            logger.warning("빈 질문 입력 시도")
+            st.error("질문을 입력해주세요.")
+
     # 하단 안내
     st.markdown("---")
     st.markdown("### 💡 사용 팁")
     st.markdown("""
     - bizMOB Platform에 대한 질문을 자유롭게 해보세요
+    - RAG 기능으로 관련 문서를 기반으로 정확한 답변을 제공합니다
     - 구체적인 질문일수록 더 정확한 답변을 받을 수 있습니다
     - 채팅 기록은 브라우저 세션 동안 유지됩니다
-    - 별도의 설정 없이 바로 사용 가능합니다
     """)
 
 if __name__ == "__main__":

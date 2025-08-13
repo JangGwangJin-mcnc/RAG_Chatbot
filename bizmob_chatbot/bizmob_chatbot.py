@@ -52,6 +52,17 @@ EXTERNAL_SOURCE_EXTS = [
     ".py", ".js", ".scss", ".ts", ".vue", ".md", ".txt", ".rst", ".json", ".yaml", ".yml"
 ]
 
+# 전역 하이브리드 검색 설정 변수
+HYBRID_SEARCH_CONFIG = {
+    'bm25_weight': 0.3,
+    'vector_weight': 0.7,
+    'initial_k': 8,
+    'final_k': 3,
+    'enable_reranking': True,
+    'metadata_boost': True,
+    'recency_boost': True
+}
+
 # ChromaDB 사용 가능 여부 확인
 try:
     import chromadb
@@ -137,6 +148,10 @@ try:
     from langchain.retrievers import ParentDocumentRetriever
     from langchain.storage import InMemoryStore
     from langchain_core.embeddings import Embeddings
+    from langchain_community.retrievers import BM25Retriever
+    from langchain.retrievers import EnsembleRetriever
+    from langchain.retrievers import ContextualCompressionRetriever
+    from langchain.retrievers.document_compressors import LLMChainExtractor
 except ImportError as e:
     st.error(f"필요한 라이브러리가 설치되지 않았습니다: {e}")
     st.stop()
@@ -1101,11 +1116,15 @@ def load_chroma_store():
         return None
     
     try:
+        logger.info("=== ChromaDB 벡터 스토어 로드 시작 ===")
+        
         # 캐시된 임베딩 모델 사용
         embeddings = get_embedding_model()
         if embeddings is None:
             logger.error("임베딩 모델 로드 실패")
             return None
+        
+        logger.info("임베딩 모델 로드 성공")
         
         # ChromaDB 클라이언트 생성 (강화된 단일 인스턴스 관리)
         import chromadb
@@ -1114,24 +1133,28 @@ def load_chroma_store():
         import gc
         
         chroma_path = get_chroma_db_path()
+        logger.info(f"ChromaDB 경로: {chroma_path}")
         
         # 디렉토리가 없으면 생성
         if not os.path.exists(chroma_path):
             os.makedirs(chroma_path, exist_ok=True)
+            logger.info(f"ChromaDB 디렉토리 생성: {chroma_path}")
         
         # 현재 선택된 모델과 임베딩으로 고유 키 생성
         selected_model = st.session_state.get('selected_model', 'exaone3.5')
         selected_embedding = st.session_state.get('selected_embedding_model', 'jhgan/ko-sroberta-multitask')
         global_vector_store_key = f"global_vector_store_{selected_model}_{selected_embedding}"
+        logger.info(f"벡터 스토어 키: {global_vector_store_key}")
         
         # 기존 벡터 스토어가 있으면 재사용
         if global_vector_store_key in st.session_state:
             try:
+                logger.info("기존 벡터 스토어 캐시 확인 중...")
                 vector_store = st.session_state[global_vector_store_key]
                 # 간단한 테스트로 연결 상태 확인
                 test_collection = vector_store._collection
-                test_collection.count()
-                logger.info("기존 벡터 스토어 재사용 성공")
+                doc_count = test_collection.count()
+                logger.info(f"기존 벡터 스토어 재사용 성공 - 문서 수: {doc_count}")
                 return vector_store
             except Exception as e:
                 logger.warning(f"기존 벡터 스토어 재사용 실패: {e}")
@@ -1142,6 +1165,7 @@ def load_chroma_store():
                 time.sleep(1)
         
         # ChromaDB 클라이언트 생성 (타임아웃 설정)
+        logger.info("ChromaDB 클라이언트 생성 중...")
         try:
             client = chromadb.PersistentClient(
                 path=chroma_path,
@@ -1162,6 +1186,7 @@ def load_chroma_store():
             # 기존 프로세스 정리 후 재시도
             try:
                 import psutil
+                logger.info("기존 ChromaDB 프로세스 정리 중...")
                 for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
                     try:
                         if 'chroma' in proc.info['name'].lower() or any('chroma' in str(cmd).lower() for cmd in proc.info['cmdline'] or []):
@@ -1171,6 +1196,7 @@ def load_chroma_store():
                         pass
                 time.sleep(2)
                 
+                logger.info("ChromaDB 클라이언트 재생성 중...")
                 client = chromadb.PersistentClient(
                     path=chroma_path,
                     settings=chromadb.config.Settings(
@@ -1188,16 +1214,20 @@ def load_chroma_store():
                 return None
         
         collection_name = "bizmob_documents"
+        logger.info(f"컬렉션 이름: {collection_name}")
         
         # 컬렉션 가져오기 (타임아웃 설정)
         try:
             collection = client.get_collection(name=collection_name)
-            logger.info("기존 컬렉션 로드 성공")
+            doc_count = collection.count()
+            logger.info(f"기존 컬렉션 로드 성공 - 문서 수: {doc_count}")
         except Exception as e:
             logger.info("새 컬렉션 생성")
             collection = client.create_collection(name=collection_name)
+            logger.info("새 컬렉션 생성 완료")
         
         # LangChain Chroma 벡터 스토어 생성
+        logger.info("LangChain Chroma 벡터 스토어 생성 중...")
         vector_store = Chroma(
             client=client,
             collection_name=collection_name,
@@ -1207,7 +1237,7 @@ def load_chroma_store():
         # 벡터 스토어를 전역에 저장
         st.session_state[global_vector_store_key] = vector_store
         
-        logger.info("새 벡터 스토어 생성 완료")
+        logger.info("=== ChromaDB 벡터 스토어 로드 완료 ===")
         return vector_store
         
     except Exception as e:
@@ -1217,6 +1247,425 @@ def load_chroma_store():
         return None
 
 ############################### 2단계 : RAG 기능 구현과 관련된 함수들 ##########################
+
+## 하이브리드 서치 구현
+class HybridRetriever:
+    """BM25와 벡터 검색을 결합한 하이브리드 검색기"""
+    
+    def __init__(self, vector_store, documents: List[Document], k: int = 8, 
+                 bm25_weight: float = 0.3, vector_weight: float = 0.7):
+        self.vector_store = vector_store
+        self.documents = documents
+        self.k = k
+        
+        # BM25 검색기 초기화
+        self.bm25_retriever = BM25Retriever.from_documents(documents)
+        self.bm25_retriever.k = k
+        
+        # 벡터 검색기 초기화
+        self.vector_retriever = vector_store.as_retriever(search_kwargs={"k": k})
+        
+        # 가중치 설정
+        self.bm25_weight = bm25_weight
+        self.vector_weight = vector_weight
+        
+        # 앙상블 검색기 생성
+        self._create_ensemble_retriever()
+    
+    def _create_ensemble_retriever(self):
+        """앙상블 검색기 생성"""
+        self.ensemble_retriever = EnsembleRetriever(
+            retrievers=[self.bm25_retriever, self.vector_retriever],
+            weights=[self.bm25_weight, self.vector_weight]
+        )
+    
+    def update_weights(self, bm25_weight: float, vector_weight: float):
+        """가중치 업데이트"""
+        self.bm25_weight = bm25_weight
+        self.vector_weight = vector_weight
+        self._create_ensemble_retriever()
+        logger.info(f"가중치 업데이트 완료 - BM25: {bm25_weight:.2f}, Vector: {vector_weight:.2f}")
+    
+    def search(self, query: str, k: int = 3, 
+               bm25_weight: float = None, vector_weight: float = None) -> List[Document]:
+        """하이브리드 검색 실행"""
+        try:
+            logger.info(f"=== 하이브리드 검색 시작: '{query[:50]}...' ===")
+            
+            # 전달받은 가중치가 있으면 업데이트
+            if bm25_weight is not None and vector_weight is not None:
+                self.update_weights(bm25_weight, vector_weight)
+            
+            logger.info(f"검색 가중치 - BM25: {self.bm25_weight:.2f}, 벡터: {self.vector_weight:.2f}")
+            
+            # 1차 검색: k=8개 결과
+            logger.info("1차 검색 실행 중... (BM25 + 벡터 앙상블)")
+            initial_results = self.ensemble_retriever.get_relevant_documents(query)
+            logger.info(f"1차 검색 완료: {len(initial_results)}개 문서 발견")
+            
+            # 검색된 문서 정보 로깅
+            for i, doc in enumerate(initial_results[:3]):  # 상위 3개만 로깅
+                source = doc.metadata.get('source', 'Unknown')
+                title = doc.metadata.get('title', 'No Title')
+                logger.info(f"  문서 {i+1}: {source} | {title}")
+            
+            # 2차 재순위화: 관련성 점수 계산 및 상위 k개 선택
+            logger.info("2차 재순위화(Reranking) 실행 중...")
+            reranked_results = self._rerank_results(query, initial_results, k)
+            
+            logger.info(f"=== 하이브리드 검색 완료 ===")
+            logger.info(f"  초기 결과: {len(initial_results)}개 → 최종 결과: {len(reranked_results)}개")
+            
+            # 최종 결과 상세 로깅
+            for i, doc in enumerate(reranked_results):
+                source = doc.metadata.get('source', 'Unknown')
+                title = doc.metadata.get('title', 'No Title')
+                relevance = doc.metadata.get('relevance_score', 'N/A')
+                logger.info(f"  최종 {i+1}위: {source} | {title} | 점수: {relevance}")
+            
+            return reranked_results
+            
+        except Exception as e:
+            logger.error(f"하이브리드 검색 실패: {e}")
+            # 폴백: 벡터 검색만 사용
+            logger.info("벡터 검색 폴백 실행...")
+            try:
+                logger.info("ChromaDB 벡터 검색 실행 중...")
+                vector_results = self.vector_retriever.get_relevant_documents(query)
+                logger.info(f"벡터 검색 폴백 완료: {len(vector_results)}개 문서")
+                
+                # 벡터 검색 결과 로깅
+                for i, doc in enumerate(vector_results[:3]):
+                    source = doc.metadata.get('source', 'Unknown')
+                    title = doc.metadata.get('title', 'No Title')
+                    logger.info(f"  벡터 검색 결과 {i+1}: {source} | {title}")
+                
+                return vector_results
+            except Exception as vector_error:
+                logger.error(f"벡터 검색 폴백도 실패: {vector_error}")
+                return []
+    
+    def _rerank_results(self, query: str, documents: List[Document], k: int) -> List[Document]:
+        """검색 결과 재순위화"""
+        try:
+            logger.info(f"재순위화 시작: {len(documents)}개 문서 처리 중...")
+            scored_docs = []
+            
+            for i, doc in enumerate(documents):
+                # 관련성 점수 계산 (간단한 키워드 매칭 + 메타데이터 가중치)
+                score = self._calculate_relevance_score(query, doc)
+                scored_docs.append((doc, score))
+                
+                # 상위 5개 문서의 점수만 로깅
+                if i < 5:
+                    source = doc.metadata.get('source', 'Unknown')
+                    title = doc.metadata.get('title', 'No Title')
+                    logger.info(f"  문서 {i+1} 점수: {score:.3f} | {source} | {title}")
+            
+            # 점수 기준 내림차순 정렬
+            scored_docs.sort(key=lambda x: x[1], reverse=True)
+            logger.info(f"재순위화 완료: 상위 {k}개 문서 선택")
+            
+            # 상위 k개 반환하고 관련성 점수를 메타데이터에 저장
+            final_docs = []
+            for doc, score in scored_docs[:k]:
+                doc.metadata['relevance_score'] = round(score, 3)
+                final_docs.append(doc)
+            
+            return final_docs
+            
+        except Exception as e:
+            logger.warning(f"재순위화 실패: {e}")
+            return documents[:k]
+    
+    def _calculate_relevance_score(self, query: str, doc: Document) -> float:
+        """문서 관련성 점수 계산"""
+        score = 0.0
+        score_details = []
+        
+        try:
+            # 1. 키워드 매칭 점수 (BM25 스타일)
+            query_words = set(query.lower().split())
+            doc_words = set(doc.page_content.lower().split())
+            
+            # 공통 단어 수
+            common_words = query_words.intersection(doc_words)
+            if common_words:
+                keyword_score = len(common_words) * 0.1
+                score += keyword_score
+                score_details.append(f"키워드: +{keyword_score:.3f} ({len(common_words)}개 공통)")
+            
+            # 2. 메타데이터 가중치
+            metadata = doc.metadata
+            if metadata:
+                # 최신 문서 우선
+                if 'updated' in metadata:
+                    try:
+                        from datetime import datetime
+                        updated_date = datetime.fromisoformat(metadata['updated'].replace('Z', '+00:00'))
+                        days_old = (datetime.now().replace(tzinfo=updated_date.tzinfo) - updated_date).days
+                        if days_old <= 30:  # 30일 이내
+                            score += 0.2
+                            score_details.append("최신성(30일): +0.200")
+                        elif days_old <= 90:  # 90일 이내
+                            score += 0.1
+                            score_details.append("최신성(90일): +0.100")
+                    except:
+                        pass
+                
+                # 문서 타입별 가중치
+                doctype_weights = {
+                    'api': 0.3,
+                    'spec': 0.3,
+                    'guide': 0.2,
+                    'blog': 0.1
+                }
+                
+                if 'doctype' in metadata:
+                    doc_type = metadata['doctype'].lower()
+                    for dt, weight in doctype_weights.items():
+                        if dt in doc_type:
+                            score += weight
+                            score_details.append(f"문서타입({dt}): +{weight:.3f}")
+                            break
+                
+                # 파일 확장자별 가중치
+                if 'source' in metadata:
+                    source = metadata['source'].lower()
+                    if source.endswith('.pdf'):
+                        score += 0.1  # PDF 우선
+                        score_details.append("파일형식(PDF): +0.100")
+                    elif source.endswith(('.md', '.txt')):
+                        score += 0.05
+                        score_details.append("파일형식(TXT/MD): +0.050")
+            
+            # 3. 내용 길이 가중치 (적당한 길이 우선)
+            content_length = len(doc.page_content)
+            if 100 <= content_length <= 1000:
+                score += 0.1
+                score_details.append("내용길이(적당): +0.100")
+            elif content_length > 1000:
+                score += 0.05
+                score_details.append("내용길이(긴): +0.050")
+            
+            # 점수 상세 정보 로깅 (디버그용)
+            if score_details:
+                source = metadata.get('source', 'Unknown') if metadata else 'Unknown'
+                title = metadata.get('title', 'No Title') if metadata else 'No Title'
+                logger.debug(f"점수 계산 상세 - {source} | {title}: {' + '.join(score_details)} = {score:.3f}")
+            
+        except Exception as e:
+            logger.warning(f"점수 계산 중 오류: {e}")
+        
+        return score
+
+def get_hybrid_retriever(vector_store, k: int = 8, 
+                        bm25_weight: float = None, vector_weight: float = None) -> HybridRetriever:
+    """하이브리드 검색기 생성"""
+    try:
+        logger.info("=== 하이브리드 검색기 생성 시작 ===")
+        
+        # 가중치 설정 (전달받은 값이 없으면 기본값 사용)
+        if bm25_weight is None or vector_weight is None:
+            config = get_hybrid_search_config()
+            bm25_weight = config['bm25_weight']
+            vector_weight = config['vector_weight']
+            logger.info(f"기본 가중치 사용 - BM25: {bm25_weight:.2f}, Vector: {vector_weight:.2f}")
+        else:
+            logger.info(f"전달받은 가중치 사용 - BM25: {bm25_weight:.2f}, Vector: {vector_weight:.2f}")
+        
+        # 벡터 스토어에서 모든 문서 가져오기
+        all_docs = []
+        try:
+            logger.info("ChromaDB에서 모든 문서 조회 중...")
+            # ChromaDB에서 모든 문서 조회
+            collection = vector_store._collection
+            logger.info(f"ChromaDB 컬렉션 접근: {collection.name}")
+            
+            # 컬렉션 정보 확인
+            total_count = collection.count()
+            logger.info(f"컬렉션 총 문서 수: {total_count}")
+            
+            if total_count == 0:
+                logger.warning("컬렉션에 문서가 없습니다")
+                return None
+            
+            # 모든 문서 조회
+            results = collection.get(include=['documents', 'metadatas'])
+            logger.info(f"문서 조회 결과: {len(results['documents'])}개 문서")
+            
+            # 문서 메타데이터 샘플 로깅
+            if results['metadatas']:
+                sample_metadata = results['metadatas'][0]
+                logger.info(f"메타데이터 샘플: {sample_metadata}")
+            
+            for i, (doc_content, metadata) in enumerate(zip(results['documents'], results['metadatas'])):
+                doc = Document(
+                    page_content=doc_content,
+                    metadata=metadata
+                )
+                all_docs.append(doc)
+                
+                # 처음 3개 문서의 내용 미리보기 로깅
+                if i < 3:
+                    content_preview = doc_content[:100] + "..." if len(doc_content) > 100 else doc_content
+                    source = metadata.get('source', 'Unknown')
+                    title = metadata.get('title', 'No Title')
+                    logger.info(f"문서 {i+1} 미리보기: {source} | {title} | 내용: {content_preview}")
+                
+        except Exception as e:
+            logger.error(f"ChromaDB 문서 조회 실패: {e}", exc_info=True)
+            all_docs = []
+        
+        logger.info(f"총 {len(all_docs)}개 문서 로드 완료")
+        
+        # 하이브리드 검색기 생성 (가중치 포함)
+        logger.info("하이브리드 검색기 객체 생성 중...")
+        hybrid_retriever = HybridRetriever(
+            vector_store, all_docs, k, 
+            bm25_weight=bm25_weight, 
+            vector_weight=vector_weight
+        )
+        logger.info(f"=== 하이브리드 검색기 생성 완료: {len(all_docs)}개 문서, 가중치: BM25={bm25_weight:.2f}, Vector={vector_weight:.2f} ===")
+        
+        return hybrid_retriever
+        
+    except Exception as e:
+        logger.error(f"하이브리드 검색기 생성 실패: {e}", exc_info=True)
+        return None
+
+# 전역 하이브리드 검색 설정 변수 추가 (파일 상단에)
+HYBRID_SEARCH_CONFIG = {
+    'bm25_weight': 0.3,
+    'vector_weight': 0.7,
+    'initial_k': 8,
+    'final_k': 3,
+    'enable_reranking': True,
+    'metadata_boost': True,
+    'recency_boost': True
+}
+
+def get_hybrid_search_config():
+    """하이브리드 검색 설정 반환"""
+    global HYBRID_SEARCH_CONFIG
+    
+    # UI에서 설정한 하이브리드 검색 설정 사용
+    if 'hybrid_search_config' in st.session_state:
+        config = st.session_state.hybrid_search_config
+        # 전역 설정 업데이트
+        HYBRID_SEARCH_CONFIG.update({
+            'bm25_weight': config.get('bm25_weight', 0.3),
+            'vector_weight': config.get('vector_weight', 0.7)
+        })
+        logger.info(f"세션 상태에서 가중치 업데이트 - BM25: {HYBRID_SEARCH_CONFIG['bm25_weight']:.2f}, Vector: {HYBRID_SEARCH_CONFIG['vector_weight']:.2f}")
+    
+    return HYBRID_SEARCH_CONFIG.copy()
+
+def update_hybrid_search_config(config: dict):
+    """하이브리드 검색 설정 업데이트"""
+    global HYBRID_SEARCH_CONFIG
+    
+    try:
+        # 전역 설정 업데이트
+        HYBRID_SEARCH_CONFIG.update({
+            'bm25_weight': config['bm25_weight'],
+            'vector_weight': config['vector_weight'],
+            'initial_k': config.get('initial_k', 8),
+            'final_k': config.get('final_k', 3),
+            'enable_reranking': config.get('enable_reranking', True),
+            'metadata_boost': config.get('metadata_boost', True),
+            'recency_boost': config.get('recency_boost', True)
+        })
+        
+        # 세션 상태도 업데이트
+        if 'hybrid_search_config' not in st.session_state:
+            st.session_state['hybrid_search_config'] = {}
+        
+        st.session_state['hybrid_search_config'].update({
+            'bm25_weight': config['bm25_weight'],
+            'vector_weight': config['vector_weight'],
+            'initial_k': config.get('initial_k', 8),
+            'final_k': config.get('final_k', 3),
+            'enable_reranking': config.get('enable_reranking', True),
+            'metadata_boost': config.get('metadata_boost', True),
+            'recency_boost': config.get('recency_boost', True)
+        })
+        
+        logger.info(f"하이브리드 검색 설정 업데이트 완료 - BM25: {config['bm25_weight']:.2f}, Vector: {config['vector_weight']:.2f}")
+        return True
+    except Exception as e:
+        logger.error(f"하이브리드 검색 설정 업데이트 실패: {e}")
+        return False
+
+def test_hybrid_search(query: str, vector_store, bm25_weight: float = None, vector_weight: float = None) -> dict:
+    """하이브리드 검색 테스트 및 성능 측정"""
+    try:
+        import time
+        
+        # 가중치 설정 (전달받은 값이 없으면 현재 설정 사용)
+        if bm25_weight is None or vector_weight is None:
+            config = get_hybrid_search_config()
+            bm25_weight = config['bm25_weight']
+            vector_weight = config['vector_weight']
+            logger.info(f"테스트에 현재 설정된 가중치 사용 - BM25: {bm25_weight:.2f}, Vector: {vector_weight:.2f}")
+        else:
+            logger.info(f"테스트에 전달받은 가중치 사용 - BM25: {bm25_weight:.2f}, Vector: {vector_weight:.2f}")
+        
+        # 벡터 검색만 테스트
+        start_time = time.time()
+        vector_retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+        vector_results = vector_retriever.invoke(query)
+        vector_time = time.time() - start_time
+        
+        # 하이브리드 검색 테스트 (가중치 포함)
+        start_time = time.time()
+        hybrid_retriever = get_hybrid_retriever(
+            vector_store, k=8, 
+            bm25_weight=bm25_weight, 
+            vector_weight=vector_weight
+        )
+        hybrid_results = hybrid_retriever.search(
+            query, k=3,
+            bm25_weight=bm25_weight,
+            vector_weight=vector_weight
+        )
+        hybrid_time = time.time() - start_time
+        
+        # 성능 지표 계산
+        performance_metrics = {
+            'search_time': round(hybrid_time, 3),
+            'result_count': len(hybrid_results),
+            'avg_relevance': 'N/A',  # 관련성 점수는 메타데이터에 저장되어 있음
+            'bm25_weight': bm25_weight,
+            'vector_weight': vector_weight
+        }
+        
+        # 결과에 관련성 점수 추가 (메타데이터에 저장된 경우)
+        for doc in vector_results:
+            if 'relevance_score' not in doc.metadata:
+                doc.metadata['relevance_score'] = 'N/A'
+        
+        for doc in hybrid_results:
+            if 'relevance_score' not in doc.metadata:
+                doc.metadata['relevance_score'] = 'N/A'
+        
+        return {
+            'vector_results': vector_results,
+            'hybrid_results': hybrid_results,
+            'performance_metrics': performance_metrics,
+            'comparison': {
+                'vector_time': round(vector_time, 3),
+                'hybrid_time': round(hybrid_time, 3),
+                'time_improvement': round((vector_time - hybrid_time) / vector_time * 100, 1) if vector_time > 0 else 0,
+                'result_overlap': len(set([doc.metadata.get('file_name', '') for doc in vector_results]) & 
+                                   set([doc.metadata.get('file_name', '') for doc in hybrid_results])),
+                'weights_used': f"BM25: {bm25_weight:.2f}, Vector: {vector_weight:.2f}"
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"하이브리드 검색 테스트 실패: {e}")
+        return None
 
 ## 사용자 질문에 대한 RAG 처리
 def process_question(user_question, rag_chain=None):
@@ -1228,25 +1677,74 @@ def process_question(user_question, rag_chain=None):
             rag_chain = get_cached_rag_chain()
             if rag_chain is None:
                 logger.error("RAG 체인 생성 실패")
-            st.error("RAG 체인 생성에 실패했습니다.")
-            return None, []
+                st.error("RAG 체인 생성에 실패했습니다.")
+                return None, []
         
         # 질문 처리
+        logger.info("=== RAG 체인 실행 시작 ===")
         response = rag_chain.invoke(user_question)
-        logger.info(f"질문 처리 완료, 응답 길이: {len(response) if response else 0}")
+        logger.info(f"RAG 체인 실행 완료, 응답 길이: {len(response) if response else 0}")
         
-        # 관련 문서 검색 (캐시된 벡터 스토어 사용)
+        if response:
+            logger.info(f"생성된 응답 미리보기: {response[:200]}...")
+        
+        # 관련 문서 검색 (하이브리드 검색 사용)
+        logger.info("=== 관련 문서 검색 시작 ===")
         retrieve_docs = []
         try:
+            logger.info("벡터 스토어 가져오기 시작...")
             vector_store = get_cached_vector_store()
             if vector_store:
-                retriever = vector_store.as_retriever(search_kwargs={"k": 3})
-                retrieve_docs = retriever.invoke(user_question)
-                logger.info(f"관련 문서 검색 완료, 문서 수: {len(retrieve_docs)}")
+                logger.info("벡터 스토어 로드 성공, 하이브리드 검색기 생성 시작...")
+                
+                # 현재 설정된 가중치 가져오기
+                current_config = get_hybrid_search_config()
+                bm25_weight = current_config['bm25_weight']
+                vector_weight = current_config['vector_weight']
+                logger.info(f"현재 설정된 가중치 - BM25: {bm25_weight:.2f}, Vector: {vector_weight:.2f}")
+                
+                # 하이브리드 검색기 사용 (현재 가중치로 생성)
+                hybrid_retriever = get_hybrid_retriever(
+                    vector_store, k=8, 
+                    bm25_weight=bm25_weight, 
+                    vector_weight=vector_weight
+                )
+                if hybrid_retriever:
+                    logger.info("하이브리드 검색기 생성 성공, 검색 실행 중...")
+                    # 검색 시에도 현재 가중치 전달
+                    retrieve_docs = hybrid_retriever.search(
+                        user_question, k=3,
+                        bm25_weight=bm25_weight,
+                        vector_weight=vector_weight
+                    )
+                    logger.info(f"하이브리드 검색 완료, 문서 수: {len(retrieve_docs)}")
+                    
+                    # 검색된 문서 상세 정보 로깅
+                    for i, doc in enumerate(retrieve_docs):
+                        source = doc.metadata.get('source', 'Unknown')
+                        title = doc.metadata.get('title', 'No Title')
+                        relevance = doc.metadata.get('relevance_score', 'N/A')
+                        logger.info(f"  검색된 문서 {i+1}: {source} | {title} | 관련성: {relevance}")
+                else:
+                    # 폴백: 기존 벡터 검색
+                    logger.info("하이브리드 검색기 생성 실패, 벡터 검색 폴백 실행...")
+                    logger.info("ChromaDB 직접 검색 실행 중...")
+                    retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+                    retrieve_docs = retriever.invoke(user_question)
+                    logger.info(f"벡터 검색 폴백 완료, 문서 수: {len(retrieve_docs)}")
+                    
+                    # 폴백 검색 결과 로깅
+                    for i, doc in enumerate(retrieve_docs):
+                        source = doc.metadata.get('source', 'Unknown')
+                        title = doc.metadata.get('title', 'No Title')
+                        logger.info(f"  폴백 검색 문서 {i+1}: {source} | {title}")
+            else:
+                logger.warning("벡터 스토어를 가져올 수 없습니다")
         except Exception as e:
-            logger.warning(f"관련 문서 검색 실패: {e}")
+            logger.error(f"관련 문서 검색 실패: {e}", exc_info=True)
 
         logger.info("=== 질문 처리 완료 ===")
+        logger.info(f"최종 결과: 응답 길이 {len(response) if response else 0}자, 문서 {len(retrieve_docs)}개")
         return response, retrieve_docs
     except Exception as e:
         logger.error(f"질문 처리 중 오류 발생: {str(e)}", exc_info=True)
@@ -1257,32 +1755,41 @@ def process_question(user_question, rag_chain=None):
 def get_cached_vector_store():
     """캐시된 벡터 스토어 반환 (모델별 캐시)"""
     try:
+        logger.info("=== 캐시된 벡터 스토어 확인 시작 ===")
+        
         # 현재 선택된 모델과 임베딩 모델로 캐시 키 생성
         selected_model = st.session_state.get('selected_model', 'exaone3.5')
         selected_embedding = st.session_state.get('selected_embedding_model', 'jhgan/ko-sroberta-multitask')
         
         cache_key = f"vector_store_{selected_model}_{selected_embedding}"
+        logger.info(f"캐시 키: {cache_key}")
         
         # 기존 캐시된 벡터 스토어가 있으면 재사용
         if cache_key in st.session_state:
             try:
+                logger.info("기존 캐시된 벡터 스토어 확인 중...")
                 vector_store = st.session_state[cache_key]
                 # 간단한 테스트로 연결 상태 확인
                 test_collection = vector_store._collection
-                test_collection.count()
-                logger.info(f"기존 벡터 스토어 캐시 재사용: {cache_key}")
+                doc_count = test_collection.count()
+                logger.info(f"기존 벡터 스토어 캐시 재사용 성공: {cache_key} (문서 수: {doc_count})")
                 return vector_store
             except Exception as e:
                 logger.warning(f"기존 벡터 스토어 캐시 재사용 실패: {e}")
                 # 기존 캐시 제거
                 del st.session_state[cache_key]
+                logger.info("실패한 캐시 제거 완료")
         
         # 새 벡터 스토어 생성
+        logger.info("새 벡터 스토어 생성 시작...")
         vector_store = load_chroma_store()
         if vector_store:
             st.session_state[cache_key] = vector_store
-            logger.info(f"새 벡터 스토어 캐시 생성: {cache_key}")
+            logger.info(f"새 벡터 스토어 캐시 생성 완료: {cache_key}")
+        else:
+            logger.error("벡터 스토어 생성 실패")
         
+        logger.info("=== 캐시된 벡터 스토어 확인 완료 ===")
         return vector_store
         
     except Exception as e:
@@ -1358,12 +1865,44 @@ def get_rag_chain() -> Runnable:
             template=template
         )
         
-        # RAG 체인 생성
+        # RAG 체인 생성 (하이브리드 검색 사용)
         from langchain_core.runnables import RunnablePassthrough
         from langchain_core.output_parsers import StrOutputParser
         
+        # 하이브리드 검색기 생성
+        hybrid_retriever = get_hybrid_retriever(vector_store, k=8)
+        if hybrid_retriever:
+            # 하이브리드 검색을 사용하는 커스텀 검색기 (Runnable 인터페이스 구현)
+            from langchain_core.runnables import Runnable
+            from typing import Any, List
+            
+            class HybridSearchRetriever(Runnable):
+                def __init__(self, hybrid_retriever):
+                    super().__init__()
+                    self.hybrid_retriever = hybrid_retriever
+                
+                def invoke(self, input_data: Any, config: Any = None) -> List[Document]:
+                    """Runnable 인터페이스 구현"""
+                    if isinstance(input_data, str):
+                        query = input_data
+                    elif isinstance(input_data, dict) and 'question' in input_data:
+                        query = input_data['question']
+                    else:
+                        query = str(input_data)
+                    
+                    return self.hybrid_retriever.search(query, k=3)
+                
+                def get_relevant_documents(self, query: str) -> List[Document]:
+                    """기존 retriever 인터페이스 호환성"""
+                    return self.hybrid_retriever.search(query, k=3)
+            
+            search_retriever = HybridSearchRetriever(hybrid_retriever)
+        else:
+            # 폴백: 기존 벡터 검색
+            search_retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+        
         chain = (
-            {"context": vector_store.as_retriever(search_kwargs={"k": 3}), "question": RunnablePassthrough()}
+            {"context": search_retriever, "question": RunnablePassthrough()}
             | prompt
             | llm
             | StrOutputParser()
@@ -1621,21 +2160,27 @@ def get_embedding_model():
     
     try:
         logger.info("1. SafeSentenceTransformerEmbeddings 시도")
+        logger.info(f"모델 이름: {selected_embedding}, 디바이스: cpu")
+        
         # 커스텀 임베딩 클래스 사용
         embeddings = SafeSentenceTransformerEmbeddings(
             model_name=selected_embedding,
             device='cpu'
         )
         logger.info("SafeSentenceTransformerEmbeddings 로드 성공")
+        logger.info(f"=== 임베딩 모델 로드 완료: {selected_embedding} ===")
         return embeddings
         
     except Exception as e:
         logger.warning(f"SafeSentenceTransformerEmbeddings 실패: {str(e)}")
+        logger.info("HuggingFaceEmbeddings로 폴백 시도...")
         st.error(f"임베딩 모델 로딩 실패: {str(e)}")
         st.info("HuggingFaceEmbeddings로 재시도합니다...")
         
         try:
             logger.info("2. HuggingFaceEmbeddings 재시도")
+            logger.info(f"모델 설정: device=cpu, torch_dtype=auto, low_cpu_mem_usage=True")
+            
             # HuggingFaceEmbeddings로 fallback (safetensors 사용)
             embeddings = HuggingFaceEmbeddings(
                 model_name=selected_embedding,
@@ -1649,11 +2194,12 @@ def get_embedding_model():
             )
             
             logger.info("HuggingFaceEmbeddings 로드 성공")
+            logger.info(f"=== 임베딩 모델 로드 완료 (폴백): {selected_embedding} ===")
             st.success(f"✅ {selected_embedding} 모델을 HuggingFaceEmbeddings로 로드했습니다.")
             return embeddings
             
         except Exception as e2:
-            logger.error(f"HuggingFaceEmbeddings 재시도도 실패: {str(e2)}")
+            logger.error(f"HuggingFaceEmbeddings 재시도도 실패: {str(e2)}", exc_info=True)
             st.error(f"HuggingFaceEmbeddings 재시도도 실패: {str(e2)}")
             st.error("임베딩 모델을 로드할 수 없습니다. 다른 모델을 선택해주세요.")
             return None
@@ -1695,7 +2241,9 @@ def get_recommended_embedding_model(ai_model_name: str) -> str:
 
 def get_chroma_db_path():
     """ChromaDB 경로 반환"""
-    return "./chroma_db"
+    chroma_path = "./chroma_db"
+    logger.info(f"ChromaDB 경로 설정: {chroma_path}")
+    return chroma_path
 
 def get_model_info_path():
     """모델 정보 파일 경로 반환"""

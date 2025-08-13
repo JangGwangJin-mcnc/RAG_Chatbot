@@ -1,0 +1,10 @@
+[33m0031aa2[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmaster[m[33m)[m Add Korean language instruction to prompt template
+[33m2d1a3e2[m Replace SentenceTransformer with direct safetensors usage to fix torch.load vulnerability
+[33m11830ce[m Fix NameError issues and resolve ChromaDB import problems
+[33mac6bdb4[m torch.load 완전 제거: safetensors만 사용하도록 모든 코드 수정
+[33m19e2776[m  torch.load 취약점 완전 해결: builtins 패치 및 SafeSentenceTransformerEmbeddings 적용
+[33mc558b75[m Fix torch.load vulnerability by implementing safetensors.load_file() and comprehensive torch.load patching
+[33m667fe0c[m Fix syntax error and remove log message from bizmob_chatbot.py
+[33m30301b5[m Replace all torch.load() with safetensors.load_file() and add global torch.load patch
+[33m0b20409[m Fix torch.load vulnerability with custom SafeSentenceTransformerEmbeddings class
+[33m94d8add[m Fix torch version compatibility for Mac and update transformers version

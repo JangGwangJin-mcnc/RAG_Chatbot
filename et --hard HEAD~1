@@ -1,0 +1,5 @@
+[33me629483[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmaster[m[33m)[m Fix ChromaDB initialization bug - delete existing collection before creating new one
+[33m0031aa2[m Add Korean language instruction to prompt template
+[33m2d1a3e2[m Replace SentenceTransformer with direct safetensors usage to fix torch.load vulnerability
+[33m11830ce[m Fix NameError issues and resolve ChromaDB import problems
+[33mac6bdb4[m torch.load 완전 제거: safetensors만 사용하도록 모든 코드 수정

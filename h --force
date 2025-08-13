@@ -1,0 +1,3 @@
+[33m17aaf1b[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmaster[m[33m)[m Fix various bugs and improve stability: 1) Fix collection variable scope error in vector DB 2) Fix chat message display with HTML tag handling 3) Fix logging permission error with fallback to console logging 4) Improve main() function structure and indentation
+[33ma689454[m 들여쓰기 수정
+[33me0615f1[m Fix indentation errors and UnboundLocalError in bizmob_chatbot.py

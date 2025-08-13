@@ -75,10 +75,8 @@ st.set_page_config(
 st.markdown("""
 <style>
     .main-header {
-        font-size: 2.5rem;
-        font-weight: bold;
-        color: #1f77b4;
         text-align: center;
+        color: #1f77b4;
         margin-bottom: 2rem;
     }
     .status-box {
@@ -95,6 +93,23 @@ st.markdown("""
         padding: 1rem;
         margin: 1rem 0;
     }
+    .chat-message-user {
+        background-color: #e3f2fd;
+        padding: 1rem;
+        border-radius: 1rem;
+        margin: 0.5rem 0;
+        border-bottom-right-radius: 0.3rem;
+    }
+    .chat-message-assistant {
+        background-color: #f3e5f5;
+        padding: 1rem;
+        border-radius: 1rem;
+        margin: 0.5rem 0;
+        border-bottom-left-radius: 0.3rem;
+    }
+    .stButton > button {
+        width: 100%;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -108,6 +123,48 @@ def initialize_session():
         st.session_state.input_counter = 0
     if 'hybrid_search_config' not in st.session_state:
         st.session_state.hybrid_search_config = {'bm25_weight': 0.3, 'vector_weight': 0.7}
+    if 'last_retrieved_docs' not in st.session_state:
+        st.session_state.last_retrieved_docs = []
+    
+    # 벡터 스토어 관련 세션 상태 자동 초기화
+    auto_clear_vector_store_cache()
+
+def auto_clear_vector_store_cache():
+    """벡터 스토어 관련 세션 상태 자동 정리"""
+    try:
+        logger.info("=== 자동 벡터 스토어 캐시 정리 시작 ===")
+        
+        # 벡터 스토어 관련 캐시 키 찾기
+        vector_cache_keys = []
+        for key in list(st.session_state.keys()):
+            if (key.startswith('vector_store_') or 
+                key.startswith('global_vector_store_') or
+                key.startswith('rag_chain_')):
+                vector_cache_keys.append(key)
+        
+        # 캐시된 벡터 스토어 자동 제거
+        for key in vector_cache_keys:
+            del st.session_state[key]
+            logger.info(f"자동 캐시 제거: {key}")
+        
+        # Streamlit 캐시 자동 무효화
+        try:
+            st.cache_resource.clear()
+            logger.info("Streamlit 캐시 자동 무효화 완료")
+        except Exception as e:
+            logger.warning(f"Streamlit 캐시 자동 무효화 실패: {e}")
+        
+        # 정리된 캐시 수 로깅
+        if vector_cache_keys:
+            logger.info(f"자동 캐시 정리 완료: {len(vector_cache_keys)}개 키 제거")
+        else:
+            logger.info("정리할 벡터 스토어 캐시가 없습니다.")
+        
+        logger.info("=== 자동 벡터 스토어 캐시 정리 완료 ===")
+        
+    except Exception as e:
+        logger.error(f"자동 캐시 정리 실패: {e}")
+        # 오류가 발생해도 앱 실행은 계속
 
 def add_message(role, content):
     """채팅 메시지 추가"""
@@ -122,65 +179,40 @@ def display_chat():
     """채팅 메시지 표시"""
     for message in st.session_state.chat_messages:
         if message['role'] == 'user':
-            # 사용자 메시지 (오른쪽 정렬)
-            with st.container():
-                col1, col2, col3 = st.columns([1, 3, 1])
-                with col2:
-                    # 사용자 메시지 - Streamlit 네이티브 컴포넌트 사용
-                    st.markdown("""
-                    <style>
-                    .user-message {
-                        background-color: #007AFF;
-                        color: white;
-                        padding: 10px 15px;
-                        border-radius: 18px;
-                        margin: 10px 0;
-                        margin-left: auto;
-                        text-align: right;
-                        max-width: 70%;
-                        min-width: 60px;
-                        word-wrap: break-word;
-                        display: inline-block;
-                        white-space: pre-wrap;
-                        line-height: 1.4;
-                    }
-                    </style>
-                    """, unsafe_allow_html=True)
-                    
-                    # 메시지 내용을 안전하게 처리
-                    safe_content = message["content"].replace("<", "&lt;").replace(">", "&gt;")
-                    st.markdown(f'<div class="user-message">{safe_content}</div>', unsafe_allow_html=True)
-                    st.caption(f"⏰ {message['timestamp']}", help="메시지 전송 시간")
+            st.markdown(f"""
+<div class="chat-message-user">
+    {message['content']}
+    <div style="font-size: 0.7em; opacity: 0.7; margin-top: 5px;">
+        {message['timestamp']}
+    </div>
+</div>
+""", unsafe_allow_html=True)
         else:
-            # AI 응답 메시지 (왼쪽 정렬)
-            with st.container():
-                col1, col2, col3 = st.columns([1, 3, 1])
-                with col2:
-                    # AI 메시지 - Streamlit 네이티브 컴포넌트 사용
-                    st.markdown("""
-                    <style>
-                    .ai-message {
-                        background-color: #F0F0F0;
-                        color: black;
-                        padding: 10px 15px;
-                        border-radius: 18px;
-                        margin: 10px 0;
-                        margin-right: auto;
-                        text-align: left;
-                        max-width: 80%;
-                        min-width: 60px;
-                        word-wrap: break-word;
-                        display: inline-block;
-                        white-space: pre-wrap;
-                        line-height: 1.4;
-                    }
-                    </style>
-                    """, unsafe_allow_html=True)
+            st.markdown(f"""
+<div class="chat-message-assistant">
+    {message['content']}
+    <div style="font-size: 0.7em; opacity: 0.7; margin-top: 5px;">
+        {message['timestamp']}
+    </div>
+</div>
+""", unsafe_allow_html=True)
+            
+            # AI 응답인 경우 관련 문서 내용 표시
+            if message['role'] == 'assistant' and 'last_retrieved_docs' in st.session_state:
+                # 마지막 AI 응답의 문서인지 확인
+                if len(st.session_state.chat_messages) > 0:
+                    last_ai_index = None
+                    for i, msg in enumerate(st.session_state.chat_messages):
+                        if msg['role'] == 'assistant':
+                            last_ai_index = i
                     
-                    # 메시지 내용을 안전하게 처리
-                    safe_content = message["content"].replace("<", "&lt;").replace(">", "&gt;")
-                    st.markdown(f'<div class="ai-message">{safe_content}</div>', unsafe_allow_html=True)
-                    st.caption(f"⏰ {message['timestamp']}", help="메시지 생성 시간")
+                    if last_ai_index == st.session_state.chat_messages.index(message):
+                        st.markdown("---")
+                        st.markdown("### 📚 **관련 문서 상세 내용**")
+                        st.info("아래 문서를 클릭하면 자세한 내용을 볼 수 있습니다.")
+                        
+                        for i, doc in enumerate(st.session_state.last_retrieved_docs):
+                            display_document_content(doc, i+1)
 
 def rag_chat_response(user_question):
     """RAG 기반 채팅 응답 생성"""
@@ -213,15 +245,21 @@ def rag_chat_response(user_question):
         except Exception as e:
             logger.warning(f"RAG 설정 업데이트 실패, 기본값 사용: {e}")
         
-        # RAG 체인으로 질문 처리
+        # RAG 체인으로 질문 처리 (안전한 벡터 스토어 사용)
         logger.info("RAG 체인으로 질문 처리 시작...")
+        
+        # 안전한 벡터 스토어 확인
+        vector_store = safe_get_vector_store()
+        if not vector_store:
+            logger.warning("벡터 스토어를 가져올 수 없습니다. 기본 RAG 체인 사용")
+        
         result = process_question(user_question)
         
         if result and len(result) == 2:
             response, retrieve_docs = result
             logger.info(f"RAG 응답 생성 성공, 길이: {len(response) if response else 0}")
             
-            # 관련 문서 정보 추가
+            # 관련 문서 정보 추가 (클릭 가능한 형태로)
             if retrieve_docs:
                 doc_info = "\n\n📚 **참고 문서:**\n"
                 for i, doc in enumerate(retrieve_docs[:3]):
@@ -235,6 +273,9 @@ def rag_chat_response(user_question):
                 else:
                     response = doc_info
                 logger.info(f"참고 문서 {len(retrieve_docs)}개 추가 완료")
+                
+                # 문서 내용을 세션에 저장하여 UI에서 표시할 수 있도록 함
+                st.session_state.last_retrieved_docs = retrieve_docs[:3]
             
             if not response:
                 response = "죄송합니다. bizMOB Platform에 대한 정보를 찾을 수 없습니다."
@@ -367,11 +408,75 @@ def get_available_models():
         logger.error(f"모델 목록 조회 중 오류: {str(e)}")
         return []
 
+def safe_get_vector_store():
+    """안전한 벡터 스토어 가져오기 (자동 복구 포함)"""
+    try:
+        logger.info("=== 안전한 벡터 스토어 가져오기 시작 ===")
+        
+        # 먼저 자동 캐시 정리 수행
+        auto_clear_vector_store_cache()
+        
+        # 벡터 스토어 가져오기
+        from bizmob_chatbot import get_cached_vector_store
+        vector_store = get_cached_vector_store()
+        
+        if vector_store:
+            logger.info("벡터 스토어 가져오기 성공")
+            return vector_store
+        else:
+            logger.warning("벡터 스토어 가져오기 실패")
+            return None
+            
+    except Exception as e:
+        logger.error(f"안전한 벡터 스토어 가져오기 실패: {e}")
+        return None
+
+def display_document_content(doc, doc_index):
+    """개별 문서 내용 표시"""
+    with st.expander(f"📄 {doc_index}. {doc.metadata.get('title', 'No Title')} (출처: {doc.metadata.get('source', 'Unknown')})", expanded=False):
+        # 문서 메타데이터 표시
+        col1, col2 = st.columns(2)
+        with col1:
+            st.info(f"**출처:** {doc.metadata.get('source', 'Unknown')}")
+        with col2:
+            st.info(f"**관련성:** {doc.metadata.get('relevance_score', 'N/A')}")
+        
+        # 추가 메타데이터가 있으면 표시
+        if 'page' in doc.metadata:
+            st.info(f"**페이지:** {doc.metadata['page']}")
+        if 'chunk_id' in doc.metadata:
+            st.info(f"**청크 ID:** {doc.metadata['chunk_id']}")
+        
+        # 문서 내용 표시
+        st.markdown("### 📝 문서 내용")
+        st.markdown(f"```\n{doc.page_content}\n```")
+        
+        # 원본 파일 다운로드 버튼 (가능한 경우)
+        source = doc.metadata.get('source', '')
+        if source and os.path.exists(source):
+            try:
+                with open(source, 'rb') as f:
+                    file_bytes = f.read()
+                    file_name = os.path.basename(source)
+                    st.download_button(
+                        label=f"📥 {file_name} 다운로드",
+                        data=file_bytes,
+                        file_name=file_name,
+                        mime="application/octet-stream"
+                    )
+            except Exception as e:
+                st.warning(f"파일 다운로드 준비 실패: {e}")
+        else:
+            st.warning("원본 파일을 찾을 수 없습니다.")
+
 def main():
     """메인 함수"""
     logger.info("=== bizMOB RAG 채팅 페이지 시작 ===")
     
-
+    # 페이지 진입 시 자동 세션 초기화
+    logger.info("페이지 진입 시 자동 세션 초기화 시작")
+    auto_clear_vector_store_cache()
+    logger.info("페이지 진입 시 자동 세션 초기화 완료")
     
     st.markdown('<h1 class="main-header">🤖 bizMOB Platform RAG 챗봇</h1>', unsafe_allow_html=True)
     

@@ -584,6 +584,146 @@ def show_admin_interface(display_chat_messages, check_vector_db_exists, initiali
             
             st.markdown("---")
             
+            # 하이브리드 검색 설정 섹션
+            st.markdown("### 🔍 하이브리드 검색 설정")
+            st.markdown("BM25(키워드 검색)와 벡터 검색의 가중치를 조절하여 검색 성능을 최적화할 수 있습니다.")
+            
+            # 하이브리드 검색 설정 초기화
+            if 'hybrid_search_config' not in st.session_state:
+                st.session_state.hybrid_search_config = {
+                    'bm25_weight': 0.3,
+                    'vector_weight': 0.7
+                }
+            
+            # 가중치 조절 슬라이더
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                bm25_weight = st.slider(
+                    "BM25 가중치 (키워드 검색)",
+                    min_value=0.0,
+                    max_value=1.0,
+                    value=st.session_state.hybrid_search_config['bm25_weight'],
+                    step=0.1,
+                    help="키워드 매칭 기반 검색의 중요도 (0.0: 비활성화, 1.0: 최대 가중치)",
+                    key="bm25_weight_slider"
+                )
+            
+            with col2:
+                vector_weight = st.slider(
+                    "벡터 가중치 (의미적 검색)",
+                    min_value=0.0,
+                    max_value=1.0,
+                    value=st.session_state.hybrid_search_config['vector_weight'],
+                    step=0.1,
+                    help="의미적 유사도 기반 검색의 중요도 (0.0: 비활성화, 1.0: 최대 가중치)",
+                    key="vector_weight_slider"
+                )
+            
+            # 가중치 합계 표시 및 경고
+            total_weight = bm25_weight + vector_weight
+            if abs(total_weight - 1.0) > 0.01:  # 1% 오차 허용
+                st.warning(f"⚠️ 가중치 합계: {total_weight:.1f} (권장: 1.0)")
+            else:
+                st.success(f"✅ 가중치 합계: {total_weight:.1f}")
+            
+            # 설정 저장 버튼
+            if st.button("💾 하이브리드 검색 설정 저장", key="save_hybrid_config"):
+                # UI 설정 저장
+                st.session_state.hybrid_search_config = {
+                    'bm25_weight': bm25_weight,
+                    'vector_weight': vector_weight
+                }
+                
+                # bizmob_chatbot 모듈의 설정 업데이트 함수 호출
+                try:
+                    from bizmob_chatbot import update_hybrid_search_config
+                    config_to_update = {
+                        'bm25_weight': bm25_weight,
+                        'vector_weight': vector_weight,
+                        'initial_k': 8,
+                        'final_k': 3,
+                        'enable_reranking': True,
+                        'metadata_boost': True,
+                        'recency_boost': True
+                    }
+                    
+                    if update_hybrid_search_config(config_to_update):
+                        st.success("하이브리드 검색 설정이 저장되었습니다!")
+                        
+                        # 설정 정보 표시
+                        st.info(f"""
+                        **현재 설정:**
+                        - BM25 (키워드 검색): {bm25_weight:.1f} ({bm25_weight*100:.0f}%)
+                        - 벡터 검색: {vector_weight:.1f} ({vector_weight*100:.0f}%)
+                        - 검색 방식: {'하이브리드' if bm25_weight > 0 and vector_weight > 0 else '단일 검색'}
+                        """)
+                    else:
+                        st.error("설정 저장에 실패했습니다.")
+                except Exception as e:
+                    st.error(f"설정 저장 중 오류가 발생했습니다: {str(e)}")
+            
+            # 하이브리드 검색 테스트 섹션
+            st.markdown("#### 🧪 검색 성능 테스트")
+            test_query = st.text_input(
+                "테스트할 검색어를 입력하세요:",
+                placeholder="예: bizMOB 기능, API 사용법, 설정 방법",
+                key="hybrid_test_query"
+            )
+            
+            if test_query and st.button("🔍 검색 테스트 실행", key="run_hybrid_test"):
+                try:
+                    # 벡터 스토어 가져오기
+                    from bizmob_chatbot import get_cached_vector_store
+                    vector_store = get_cached_vector_store()
+                    
+                    if vector_store:
+                        # 하이브리드 검색 테스트 실행
+                        from bizmob_chatbot import test_hybrid_search
+                        test_results = test_hybrid_search(test_query, vector_store)
+                        
+                        if test_results:
+                            st.markdown("**테스트 결과:**")
+                            
+                            # 결과 비교 테이블
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                st.markdown("**🔍 하이브리드 검색 결과**")
+                                if test_results.get('hybrid_results'):
+                                    for i, doc in enumerate(test_results['hybrid_results'][:3]):
+                                        st.markdown(f"{i+1}. {doc.metadata.get('file_name', 'Unknown')}")
+                                        st.markdown(f"   점수: {doc.metadata.get('relevance_score', 'N/A')}")
+                                else:
+                                    st.info("하이브리드 검색 결과가 없습니다.")
+                            
+                            with col2:
+                                st.markdown("**📊 벡터 검색 결과**")
+                                if test_results.get('vector_results'):
+                                    for i, doc in enumerate(test_results['vector_results'][:3]):
+                                        st.markdown(f"{i+1}. {doc.metadata.get('file_name', 'Unknown')}")
+                                        st.markdown(f"   점수: {doc.metadata.get('relevance_score', 'N/A')}")
+                                else:
+                                    st.info("벡터 검색 결과가 없습니다.")
+                            
+                            # 성능 지표
+                            if 'performance_metrics' in test_results:
+                                metrics = test_results['performance_metrics']
+                                st.markdown("**📈 성능 지표:**")
+                                st.info(f"""
+                                - 검색 시간: {metrics.get('search_time', 'N/A')}초
+                                - 결과 수: {metrics.get('result_count', 'N/A')}개
+                                - 평균 관련성 점수: {metrics.get('avg_relevance', 'N/A')}
+                                """)
+                        else:
+                            st.error("검색 테스트 실행에 실패했습니다.")
+                    else:
+                        st.warning("벡터 스토어를 가져올 수 없습니다. 먼저 벡터DB를 초기화하세요.")
+                except Exception as e:
+                    st.error(f"검색 테스트 중 오류가 발생했습니다: {str(e)}")
+            
+            st.markdown("---")
+            
             # ChromaDB 뷰어 섹션
             st.markdown("### 👁️ ChromaDB 뷰어")
             # 모델 변경 시 리플래시
